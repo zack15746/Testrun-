@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Civ VR – v1</title>
+<style>
+:root{--bg:#10161c;--fg:#f2f5f7;--card:rgba(10,16,22,.82);--btn:#3fa66b;box-sizing:border-box}
+@media (prefers-color-scheme:dark){:root{--bg:#10161c}}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;overflow:hidden}
+canvas{display:block}
+#ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:env(safe-area-inset-top,0) 16px env(safe-area-inset-bottom,0)}
+#card{background:var(--card);border-radius:14px;padding:20px 24px;max-width:420px;text-align:center}
+h1{margin:0 0 8px;font-size:22px}
+p{margin:6px 0;font-size:14px;line-height:1.45}
+button{background:var(--btn);color:#fff;border:0;border-radius:10px;padding:12px 20px;font-size:16px;margin:8px 4px 0;cursor:pointer}
+button.alt{background:#4a5560}
+#hud{position:fixed;left:10px;bottom:10px;border-radius:8px}
+</style>
+</head>
+<body>
+<div id="ov"><div id="card">
+<h1>Civ VR – v1</h1>
+<p>Start alone. Mine trees and rocks. Explore an endless world.</p>
+<p><b>Quest:</b> left stick moves, right stick snap-turns, swing the tool in your right hand at trees and rocks (right stick click switches tool). X/Y choose a recipe, A crafts, B toggles build mode (trigger places, grip removes). Map, counts and recipes are on your left wrist.</p>
+<p><b>Desktop preview:</b> click to look, WASD to move, click to swing, T switches tool, C chooses a recipe, E crafts, B build mode (click places, X removes).</p>
+<button id="vr" disabled>Checking VR…</button><button id="pl" class="alt">Preview on screen</button>
+</div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ===== CONFIG (tweak here) =====
+const CFG={CS:80,SEG:20,RAD:1,FOG:95,SPEED:3.5,SNAP:Math.PI/6,RANGE:5,TREES:30,ROCKS:10,GOLD:3,
+  RES:{tree:{hp:5,give:'wood',n:3,r:.7,cy:1.2},rock:{hp:5,give:'stone',n:2,r:.9,cy:.4},gold:{hp:5,give:'gold',n:1,r:.9,cy:.4}}};
+const T=THREE, Y=new T.Vector3(0,1,0);
+
+// ===== MODULE: renderer & scene =====
+const scene=new T.Scene();scene.background=new T.Color(0xc2d9ea);scene.fog=new T.Fog(0xc2d9ea,40,CFG.FOG);
+const camera=new T.PerspectiveCamera(70,innerWidth/innerHeight,.1,200);camera.position.y=1.6;
+const rig=new T.Group();rig.add(camera);scene.add(rig);
+const renderer=new T.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(1);renderer.setSize(innerWidth,innerHeight);
+renderer.xr.enabled=true;renderer.xr.setReferenceSpaceType('local-floor');
+document.body.appendChild(renderer.domElement);
+scene.add(new T.HemisphereLight(0xbfd8f0,0x4a4a30,.7));
+const sun=new T.DirectionalLight(0xfff0d0,.95);sun.position.set(50,100,30);scene.add(sun);
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+// ===== MODULE: world (chunk streaming, deterministic) =====
+function groundOld(x,z){return Math.sin(x*.02)*Math.cos(z*.025)*6+Math.sin(x*.05+z*.03)*2+Math.sin(z*.09)*.8}
+function rng(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const trunkG=new T.CylinderGeometry(.18,.25,2,6);trunkG.translate(0,1,0);
+const crownG=new T.ConeGeometry(1.3,3.4,7);crownG.translate(0,3.6,0);
+const rockG=new T.DodecahedronGeometry(.8,0);rockG.translate(0,.35,0);
+const trunkM=new T.MeshLambertMaterial({color:0x6b4a2b}),crownM=new T.MeshLambertMaterial({color:0x2f7a3a}),
+      rockM=new T.MeshLambertMaterial({color:0x8a8f96,flatShading:true}),goldM=new T.MeshLambertMaterial({color:0xe0b83a,flatShading:true}),
+      terrM=new T.MeshLambertMaterial({vertexColors:true});
+const dummy=new T.Object3D(),chunks=new Map(),gone=new Set();
+function setInst(r){
+  dummy.position.set(r.x,r.y,r.z);dummy.rotation.y=r.rot;
+  dummy.scale.setScalar(r.alive?r.s*(.5+.5*r.hp/r.max):0);dummy.updateMatrix();
+  for(const m of r.m){m.setMatrixAt(r.i,dummy.matrix);m.instanceMatrix.needsUpdate=true}
+}
+// ===== realistic terrain, big forests, stone and gold clusters =====
+function hash(x,z){let h=Math.imul(x|0,374761393)+Math.imul(z|0,668265263);h=Math.imul(h^h>>>13,1274126177);return((h^h>>>16)>>>0)/4294967296}
+function vnoise(x,z){const xi=Math.floor(x),zi=Math.floor(z),xf=x-xi,zf=z-zi,u=xf*xf*(3-2*xf),v=zf*zf*(3-2*zf),
+  a=hash(xi,zi),b=hash(xi+1,zi),c=hash(xi,zi+1),d=hash(xi+1,zi+1);return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v}
+function fbm(x,z,o){let s=0,a=.5,f=1;for(let i=0;i<o;i++){s+=a*vnoise(x*f,z*f);f*=2;a*=.5}return s}
+function ground(x,z){
+  const w=fbm(x*.004+10,z*.004+10,2),h=(fbm(x*.006,z*.006,4)-.5)*46*(.4+w)+(vnoise(x*.15,z*.15)-.5)*.5;
+  const k=Math.min(1,Math.max(0,(Math.hypot(x,z)-15)/80));return 2+h*k}
+function jit(g,a){const p=g.attributes.position;for(let i=0;i<p.count;i++){
+  const X=Math.round(p.getX(i)*40),Y=Math.round(p.getY(i)*40),Z=Math.round(p.getZ(i)*40);
+  p.setXYZ(i,p.getX(i)+(hash(X+Y*7,Z)-.5)*a,p.getY(i)+(hash(Y+Z*5,X+11)-.5)*a*.6,p.getZ(i)+(hash(Z+X*3,Y+23)-.5)*a)}
+  g.computeVertexNormals();return g}
+const NT=(()=>{const f=(g,y)=>{g.translate(0,y,0);return g},rk=jit(new T.IcosahedronGeometry(.9,1),.3);rk.scale(1,.72,1);rk.translate(0,.3,0);
+  return{trunk:f(jit(new T.CylinderGeometry(.16,.3,4.4,7),.05),2.2),c1:f(jit(new T.ConeGeometry(1.9,4,8),.4),4.4),
+    c2:f(jit(new T.ConeGeometry(1.5,3.4,8),.35),6.4),c3:f(jit(new T.ConeGeometry(1,2.8,8),.3),8.2),rock:rk}})();
+const mW=new T.MeshLambertMaterial({color:0xffffff}),mRk=new T.MeshLambertMaterial({color:0xffffff,flatShading:true}),
+  mGd=new T.MeshLambertMaterial({color:0xffffff,flatShading:true,emissive:0x3a2800}),_c=new T.Color();
+const sky=new T.Mesh(new T.SphereGeometry(190,16,10),new T.MeshBasicMaterial({vertexColors:true,side:T.BackSide,fog:false,depthWrite:false}));
+{const p=sky.geometry.attributes.position,c=[],top=new T.Color(0x3f7fc4),hor=new T.Color(0xc2d9ea),tmp=new T.Color();
+  for(let i=0;i<p.count;i++){const t=Math.max(0,Math.min(1,p.getY(i)/190));tmp.copy(hor).lerp(top,Math.pow(t,.6));c.push(tmp.r,tmp.g,tmp.b)}
+  sky.geometry.setAttribute('color',new T.Float32BufferAttribute(c,3))}
+sky.renderOrder=-1;scene.add(sky);
+function paint(type,i,ms,R){
+  if(type==='tree'){_c.setHSL(.07+R()*.03,.35,.16+R()*.08);ms[0].setColorAt(i,_c);_c.setHSL(.26+R()*.07,.4+R()*.15,.13+R()*.1);for(let k=1;k<ms.length;k++)ms[k].setColorAt(i,_c)}
+  else if(type==='rock'){_c.setHSL(.09+R()*.04,.06+R()*.08,.34+R()*.2);ms[0].setColorAt(i,_c)}
+  else{_c.setHSL(.12,.85,.42+R()*.14);ms[0].setColorAt(i,_c)}}
+function makeChunk(cx,cz){
+  const CS=CFG.CS,SG=32,g=new T.PlaneGeometry(CS,CS,SG,SG);g.rotateX(-Math.PI/2);
+  const p=g.attributes.position,col=new Float32Array(p.count*3),nor=new Float32Array(p.count*3),ox=cx*CS+CS/2,oz=cz*CS+CS/2;
+  for(let i=0;i<p.count;i++){
+    const x=p.getX(i)+ox,z=p.getZ(i)+oz,h=ground(x,z);p.setXYZ(i,x,h,z);
+    let nx=ground(x-1,z)-ground(x+1,z),nz=ground(x,z-1)-ground(x,z+1);const l=Math.hypot(nx,2,nz);nx/=l;nz/=l;const ny=2/l;
+    nor[i*3]=nx;nor[i*3+1]=ny;nor[i*3+2]=nz;
+    const pa=fbm(x*.02+50,z*.02+50,3),sp=hash(Math.round(x*3),Math.round(z*3))*.05;
+    let r=.19+.14*pa,gg=.36+.12*pa,b=.12+.06*pa;
+    const dirt=Math.max(0,Math.min(1,(vnoise(x*.04+9,z*.04+9)-.62)*5));
+    r+=(.4-r)*dirt;gg+=(.31-gg)*dirt;b+=(.2-b)*dirt;
+    const kk=Math.max(Math.max(0,Math.min(1,(.88-ny)*8)),Math.max(0,Math.min(1,(h-9)/5)));
+    r+=(.44-r)*kk;gg+=(.42-gg)*kk;b+=(.39-b)*kk;
+    col[i*3]=r+sp;col[i*3+1]=gg+sp;col[i*3+2]=b+sp}
+  g.setAttribute('color',new T.BufferAttribute(col,3));g.setAttribute('normal',new T.BufferAttribute(nor,3));
+  const terr=new T.Mesh(g,terrM);
+  const R=rng((cx*73856093)^(cz*19349663)^0x5bd1),sp2=[],at=()=>[cx*CS+R()*CS,cz*CS+R()*CS];
+  const nf=3+Math.floor(R()*3);
+  for(let f=0;f<nf;f++){const[fx,fz]=at(),rad=10+R()*14,n=12+Math.floor(R()*14);
+    for(let i=0;i<n;i++){const a=R()*6.283,d=Math.sqrt(R())*rad;sp2.push({type:'tree',x:fx+Math.cos(a)*d,z:fz+Math.sin(a)*d,s:.9+R()*.9})}}
+  for(let i=0;i<8;i++){const[x,z]=at();sp2.push({type:'tree',x,z,s:.9+R()*.9})}
+  const nr=2+Math.floor(R()*2);let lr=[cx*CS+CS/2,cz*CS+CS/2];
+  for(let f=0;f<nr;f++){const[fx,fz]=at(),rad=4+R()*4,n=8+Math.floor(R()*8);lr=[fx,fz];
+    for(let i=0;i<n;i++){const a=R()*6.283,d=Math.sqrt(R())*rad;sp2.push({type:'rock',x:fx+Math.cos(a)*d,z:fz+Math.sin(a)*d,s:.6+R()+(1-d/rad)*.9})}}
+  if(R()<.6){const a0=R()*6.283,gx=lr[0]+Math.cos(a0)*8,gz=lr[1]+Math.sin(a0)*8,n=5+Math.floor(R()*4);
+    for(let i=0;i<n;i++){const a=R()*6.283,d=Math.sqrt(R())*3;sp2.push({type:'gold',x:gx+Math.cos(a)*d,z:gz+Math.sin(a)*d,s:.5+R()*.5})}}
+  const by={tree:[],rock:[],gold:[]};for(const s of sp2)if(Math.hypot(s.x,s.z)>8)by[s.type].push(s);
+  const nT=Math.max(1,by.tree.length),nR=Math.max(1,by.rock.length),nG=Math.max(1,by.gold.length);
+  const trunks=new T.InstancedMesh(NT.trunk,mW,nT),c1=new T.InstancedMesh(NT.c1,mW,nT),c2=new T.InstancedMesh(NT.c2,mW,nT),c3=new T.InstancedMesh(NT.c3,mW,nT),
+    rocks=new T.InstancedMesh(NT.rock,mRk,nR),golds=new T.InstancedMesh(NT.rock,mGd,nG),res=[];
+  const grp={tree:[trunks,c1,c2,c3],rock:[rocks],gold:[golds]};
+  for(const type of['tree','rock','gold'])by[type].forEach((s0,i)=>{
+    const d=CFG.RES[type],key=cx+','+cz+':'+type+i,ms=grp[type];
+    const r={key,type,i,m:ms,x:s0.x,z:s0.z,y:ground(s0.x,s0.z),s:s0.s,rot:R()*6.28,hp:d.hp,max:d.hp,alive:!gone.has(key)};
+    paint(type,i,ms,R);res.push(r);setInst(r)});
+  if(!by.gold.length){dummy.scale.setScalar(0);dummy.updateMatrix();golds.setMatrixAt(0,dummy.matrix)}
+  const meshes=[trunks,c1,c2,c3,rocks,golds];
+  meshes.forEach(m=>{m.frustumCulled=false;if(m.instanceColor)m.instanceColor.needsUpdate=true});
+  scene.add(terr,...meshes);
+  return{terr,meshes,res}}
+function makeChunkOld(cx,cz){
+  const CS=CFG.CS,g=new T.PlaneGeometry(CS,CS,CFG.SEG,CFG.SEG);g.rotateX(-Math.PI/2);
+  const p=g.attributes.position,col=new Float32Array(p.count*3),ox=cx*CS+CS/2,oz=cz*CS+CS/2;
+  for(let i=0;i<p.count;i++){
+    const x=p.getX(i)+ox,z=p.getZ(i)+oz,h=ground(x,z);p.setXYZ(i,x,h,z);
+    const sh=.88+.12*Math.sin(x*.7)*Math.cos(z*.7),k=Math.max(0,Math.min(1,(h-4)/4));
+    col[i*3]=(.28*(1-k)+.5*k)*sh;col[i*3+1]=(.52*(1-k)+.5*k)*sh;col[i*3+2]=(.25*(1-k)+.5*k)*sh}
+  g.setAttribute('color',new T.BufferAttribute(col,3));g.computeVertexNormals();
+  const terr=new T.Mesh(g,terrM);
+  const R=rng((cx*73856093)^(cz*19349663)),res=[];
+  const trunks=new T.InstancedMesh(trunkG,trunkM,CFG.TREES),crowns=new T.InstancedMesh(crownG,crownM,CFG.TREES),rocks=new T.InstancedMesh(rockG,rockM,CFG.ROCKS),golds=new T.InstancedMesh(rockG,goldM,CFG.GOLD);
+  [trunks,crowns,rocks,golds].forEach(m=>m.frustumCulled=false);
+  function add(type,i,ms){
+    const x=cx*CS+R()*CS,z=cz*CS+R()*CS,d=CFG.RES[type];
+    const key=cx+','+cz+':'+type+i,r={key,type,i,m:ms,x,z,y:ground(x,z),s:.8+R()*.7,rot:R()*6.28,hp:d.hp,max:d.hp,alive:Math.hypot(x,z)>6&&!gone.has(key)};
+    res.push(r);setInst(r)}
+  for(let i=0;i<CFG.TREES;i++)add('tree',i,[trunks,crowns]);
+  for(let i=0;i<CFG.ROCKS;i++)add('rock',i,[rocks]);
+  for(let i=0;i<CFG.GOLD;i++)add('gold',i,[golds]);
+  scene.add(terr,trunks,crowns,rocks,golds);
+  return{terr,meshes:[trunks,crowns,rocks,golds],res}
+}
+let lastKey='',curC=[0,0];const pending=[];
+function updateChunks(x,z){
+  const cx=Math.floor(x/CFG.CS),cz=Math.floor(z/CFG.CS),key=cx+','+cz;if(key===lastKey)return;lastKey=key;
+  curC=[cx,cz];pending.length=0;
+  for(let dx=-CFG.RAD;dx<=CFG.RAD;dx++)for(let dz=-CFG.RAD;dz<=CFG.RAD;dz++){
+    if(!chunks.has((cx+dx)+','+(cz+dz)))pending.push([cx+dx,cz+dz])}
+  pending.sort((p,q)=>Math.hypot(p[0]-cx,p[1]-cz)-Math.hypot(q[0]-cx,q[1]-cz));
+  for(const[k,c]of chunks){const[a,b]=k.split(',').map(Number);
+    if(Math.abs(a-cx)>CFG.RAD||Math.abs(b-cz)>CFG.RAD){
+      scene.remove(c.terr,...c.meshes);c.terr.geometry.dispose();c.meshes.forEach(m=>m.dispose());chunks.delete(k)}}
+}
+
+// build at most one chunk per frame so crossing a border never causes a hitch
+function pump(){const p=pending.shift();if(!p)return;const k=p[0]+','+p[1];
+  if(!chunks.has(k)&&Math.abs(p[0]-curC[0])<=CFG.RAD&&Math.abs(p[1]-curC[1])<=CFG.RAD)chunks.set(k,makeChunk(p[0],p[1]))}
+
+// ===== MODULE: HUD / minimap (canvas shown on left wrist in VR) =====
+const inv={wood:0,stone:0,gold:0};
+const hc=document.createElement('canvas');hc.width=320;hc.height=160;hc.id='hud';document.body.appendChild(hc);
+const hx=hc.getContext('2d'),hudTex=new T.CanvasTexture(hc);
+const panel=new T.Mesh(new T.PlaneGeometry(.24,.12),new T.MeshBasicMaterial({map:hudTex,transparent:true}));
+panel.rotation.x=-Math.PI/2+.6;panel.position.set(0,.08,0);
+const _h=new T.Vector3(),_d=new T.Vector3();
+let targetName='';
+function drawHud(){
+  camera.getWorldPosition(_h);camera.getWorldDirection(_d);
+  hx.clearRect(0,0,320,160);hx.fillStyle='rgba(10,16,22,.7)';hx.fillRect(0,0,320,160);
+  hx.save();hx.beginPath();hx.arc(80,80,76,0,6.283);hx.clip();hx.fillStyle='#24402c';hx.fillRect(0,0,160,160);
+  const sc=76/60;
+  for(const c of chunks.values())for(const r of c.res){if(!r.alive)continue;
+    const mx=80+(r.x-_h.x)*sc,my=80+(r.z-_h.z)*sc;if(mx<0||my<0||mx>160||my>160)continue;
+    hx.fillStyle=r.type==='tree'?'#5fd06b':r.type==='gold'?'#ffd23a':'#c4c9cf';hx.fillRect(mx-1.5,my-1.5,3,3)}
+  for(const p of placed){hx.fillStyle=p.def.kind==='floor'?'#b88f55':'#e8d3a8';hx.fillRect(80+(p.x-_h.x)*sc-1.5,80+(p.z-_h.z)*sc-1.5,3,3)}
+  hx.translate(80,80);hx.rotate(Math.atan2(_d.z,_d.x));hx.fillStyle='#fff';
+  hx.beginPath();hx.moveTo(9,0);hx.lineTo(-6,-5);hx.lineTo(-6,5);hx.fill();hx.restore();
+  hx.strokeStyle='#fff';hx.lineWidth=2;hx.beginPath();hx.arc(80,80,76,0,6.283);hx.stroke();
+  hx.fillStyle='#fff';hx.font='bold 22px system-ui';hx.font='bold 12px system-ui';hx.fillText('W'+inv.wood+' S'+inv.stone+' G'+inv.gold+' Pop '+units.length,176,24);hudCraft();
+  hx.font='14px system-ui';hx.fillStyle='#ffd27a';hx.fillText(targetName,176,152);
+  hudTex.needsUpdate=true}
+
+// ===== MODULE: input =====
+const ctrls=[0,1].map(i=>{
+  const c=renderer.xr.getController(i);
+  c.add(new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(),new T.Vector3(0,0,-CFG.RANGE)]),new T.LineBasicMaterial({color:0xffffff})));
+  c.addEventListener('connected',e=>{c.userData.hand=e.data.handedness;c.userData.gp=e.data.gamepad;if(e.data.handedness==='left')c.add(panel);if(e.data.handedness==='right'){c.add(toolRoot);toolRoot.position.set(0,0,0);toolRoot.rotation.set(0,0,0)}});
+  c.addEventListener('selectstart',()=>{held=c;if(build)place()});c.addEventListener('selectend',()=>{if(held===c)held=null});
+  rig.add(c);return c});
+let held=null,xr=false,yaw=0,pitch=0,latch=false,locked=false,deskMine=false;const keys={};
+addEventListener('keydown',e=>{keys[e.code]=1;if(e.code==='KeyC')cyc(1);if(e.code==='KeyE')craft();if(e.code==='KeyB')toggleBuild();if(e.code==='KeyX')demolish();if(e.code==='KeyT')cycTool()});addEventListener('keyup',e=>keys[e.code]=0);
+renderer.domElement.addEventListener('click',()=>{if(!xr&&!locked)renderer.domElement.requestPointerLock?.()});
+document.addEventListener('pointerlockchange',()=>locked=document.pointerLockElement===renderer.domElement);
+addEventListener('mousemove',e=>{if(!locked||xr)return;yaw-=e.movementX*.0025;pitch=Math.max(-1.4,Math.min(1.4,pitch-e.movementY*.0025))});
+addEventListener('mousedown',()=>{if(locked){if(build)place();else deskSwing=true}});addEventListener('mouseup',()=>deskMine=false);
+
+// ===== MODULE: crafting (data-driven: add recipes to this list) =====
+CFG.RECIPES=[
+  {id:'bench',name:'Workbench',cost:{wood:5}},
+  {id:'axe',name:'Stone Axe',cost:{wood:3,stone:2},bench:true,once:true},
+  {id:'pick',name:'Stone Pickaxe',cost:{wood:3,stone:4},bench:true,once:true}];
+const tools={axe:false,pick:false},benches=[];let sel=0;
+const bBase=new T.BoxGeometry(1.2,.8,.6),bTop=new T.BoxGeometry(1.5,.1,.9),
+  bM1=new T.MeshLambertMaterial({color:0x6b4a2b}),bM2=new T.MeshLambertMaterial({color:0x9a6a35});
+function addBench(x,z){
+  const g=new T.Group(),a=new T.Mesh(bBase,bM1),b=new T.Mesh(bTop,bM2);a.position.y=.4;b.position.y=.85;g.add(a,b);
+  g.position.set(x,ground(x,z),z);scene.add(g);benches.push({x,z})}
+function nearBench(){return benches.some(b=>Math.hypot(b.x-_h.x,b.z-_h.z)<6)}
+function status(r){
+  if(r.once&&tools[r.id])return'Owned';
+  if(r.bench&&!nearBench())return'Need workbench nearby';
+  if(r.near&&!nearB(r.near))return'Need '+r.near.replace('_',' ')+' nearby';
+  if(r.unit&&units.length>=30)return'Population full';
+  for(const k in r.cost)if(inv[k]<r.cost[k])return'Need more resources';
+  return'Ready'}
+function cyc(n){if(build)return cycPiece(n);sel=(sel+n+CFG.RECIPES.length)%CFG.RECIPES.length;hudT=0}
+function craft(){if(build)return rotPiece();
+  camera.getWorldPosition(_h);const r=CFG.RECIPES[sel];if(status(r)!=='Ready')return;
+  for(const k in r.cost)inv[k]-=r.cost[k];
+  if(r.id==='bench'){const d=camera.getWorldDirection(new T.Vector3());d.y=0;d.normalize();addBench(_h.x+d.x*2.5,_h.z+d.z*2.5)}
+  else if(r.unit)spawnFor(r);else{tools[r.id]=true;equip(r.id)}
+  hudT=0}
+function hudCraft(){if(build)return hudBuild();
+  const r=CFG.RECIPES[sel],st=status(r),ok=st==='Ready';
+  hx.font='13px system-ui';hx.fillStyle='#bbb';
+  hx.fillText((tools.axe?'Axe ✓ ':'')+(tools.pick?'Pick ✓':'')||'No tools yet',176,44);
+  hx.fillStyle='#fff';hx.font='bold 15px system-ui';hx.fillText(r.name,176,72);
+  hx.font='13px system-ui';hx.fillStyle='#bbb';
+  hx.fillText(Object.entries(r.cost).map(([k,v])=>v+' '+k).join(', '),176,90);
+  hx.fillStyle=ok?'#7dff9a':'#ff9a7d';hx.fillText(st,176,108);
+  hx.fillStyle='#8fa0ad';hx.font='11px system-ui';hx.fillText(xr?'X/Y choose · A craft':'C choose · E craft',176,126)}
+let _pr={};function edge(k,v){const e=v&&!_pr[k];_pr[k]=!!v;return e}
+
+// ===== MODULE: building (data-driven pieces, ghost preview, grid snap, collision) =====
+const G=2,PR=.25,PIECES=[
+  {id:'wood_wall',name:'Wood Wall',kind:'wall',cost:{wood:2},color:0x9a6a35,needs:'bench'},
+  {id:'wood_door',name:'Wood Doorway',kind:'wall',door:true,cost:{wood:3},color:0x8a5a2b,needs:'bench'},
+  {id:'wood_floor',name:'Wood Floor',kind:'floor',cost:{wood:2},color:0xb07d44,needs:'bench'},
+  {id:'stone_wall',name:'Stone Wall',kind:'wall',cost:{stone:3},color:0x8f949b,needs:'pick'}];
+let build=false,psel=0,prot=0,ghostFor=-1,gpos=null;const placed=[],occ=new Map(),gc={},mc={};
+const gOK=new T.MeshBasicMaterial({color:0x66ff88,transparent:true,opacity:.45,depthWrite:false}),
+      gBad=new T.MeshBasicMaterial({color:0xff6666,transparent:true,opacity:.45,depthWrite:false});
+const ghostRoot=new T.Group();scene.add(ghostRoot);
+function bg(w,h,d){const k=w+','+h+','+d;return gc[k]||(gc[k]=new T.BoxGeometry(w,h,d))}
+function pm(def){return mc[def.id]||(mc[def.id]=new T.MeshLambertMaterial({color:def.color}))}
+function pmesh(def,mat){
+  if(def.parts){const g=new T.Group();for(const p of def.parts){const m=new T.Mesh(bg(p[0],p[1],p[2]),mat===gOK||mat===gBad?mat:cm(p[6]));m.position.set(p[3],p[4],p[5]);g.add(m)}return g}
+  const g=new T.Group(),add=(w,h,d,x,y,z)=>{const m=new T.Mesh(bg(w,h,d),mat);m.position.set(x,y,z);g.add(m)};
+  if(def.kind==='floor')add(2,1.5,2,0,-.7,0);
+  else if(def.door){add(.45,3.9,.24,-.775,.45,0);add(.45,3.9,.24,.775,.45,0);add(1.1,.7,.24,0,2.05,0)}
+  else add(2,3.9,.24,0,.45,0);
+  return g}
+function gsnap(def,x,z,rot){if(def.kind==='building')return def.s===4?[Math.round(x/G)*G,Math.round(z/G)*G]:[Math.floor(x/G)*G+1,Math.floor(z/G)*G+1];
+  if(def.kind==='floor')return[Math.floor(x/G)*G+1,Math.floor(z/G)*G+1];
+  return rot?[Math.round(x/G)*G,Math.floor(z/G)*G+1]:[Math.floor(x/G)*G+1,Math.round(z/G)*G]}
+function slot(def,c,rot){return(def.kind==='wall'?'w'+rot:def.kind==='building'?'b':'f')+':'+c[0]+','+c[1]}
+function solidsFor(def,cx,cz,rot){
+  if(def.kind==='floor')return[];if(def.kind==='building'){const h=def.s*.475;return[{x0:cx-h,x1:cx+h,z0:cz-h,z1:cz+h}]}const t=.12,L=[];
+  for(const[a,b]of def.door?[[-1,-.55],[.55,1]]:[[-1,1]])L.push(rot?{x0:cx-t,x1:cx+t,z0:cz+a,z1:cz+b}:{x0:cx+a,x1:cx+b,z0:cz-t,z1:cz+t});
+  return L}
+function push(s,x,z){
+  const nx=Math.max(s.x0,Math.min(x,s.x1)),nz=Math.max(s.z0,Math.min(z,s.z1)),dx=x-nx,dz=z-nz,d2=dx*dx+dz*dz;
+  if(d2>=PR*PR)return[x,z];
+  if(d2>1e-8){const d=Math.sqrt(d2);return[nx+dx/d*PR,nz+dz/d*PR]}
+  const l=x-s.x0,r=s.x1-x,u=z-s.z0,n=s.z1-z,m=Math.min(l,r,u,n);
+  return m===l?[s.x0-PR,z]:m===r?[s.x1+PR,z]:m===u?[x,s.z0-PR]:[x,s.z1+PR]}
+function collide(x,z){
+  for(const p of placed){if(Math.abs(p.x-x)>3||Math.abs(p.z-z)>3)continue;
+    for(const s of p.solids){const q=push(s,x,z);x=q[0];z=q[1]}}
+  for(const b of benches){const q=push({x0:b.x-.75,x1:b.x+.75,z0:b.z-.45,z1:b.z+.45},x,z);x=q[0];z=q[1]}
+  return[x,z]}
+function pStatus(p){
+  if(p.needs==='bench'&&!benches.length)return'Build a workbench first';
+  if(p.needs==='pick'&&!tools.pick)return'Craft the pickaxe first';
+  if(p.needs==='tc'&&!placed.some(q=>q.id==='town_center'))return'Build a town center first';
+  for(const k in p.cost)if(inv[k]<p.cost[k])return'Need more resources';
+  return'Ready'}
+function groundHit(){
+  aim();
+  for(let t=.3;t<14;t+=.4){const x=_o.x+_a.x*t,z=_o.z+_a.z*t;if(_o.y+_a.y*t<ground(x,z))return[x,z]}
+  return null}
+function updateGhost(){
+  ghostRoot.visible=build;if(!build)return;const p=PIECES[psel];
+  if(ghostFor!==psel){ghostRoot.clear();ghostRoot.add(pmesh(p,gOK));ghostFor=psel}
+  const h=groundHit();gpos=null;if(!h){ghostRoot.visible=false;return}
+  const c=gsnap(p,h[0],h[1],prot),key=slot(p,c,prot),ok=pStatus(p)==='Ready'&&!occ.has(key)&&!blocked(p,c);
+  gpos={c,key,ok};ghostRoot.position.set(c[0],ground(c[0],c[1]),c[1]);
+  ghostRoot.rotation.y=p.kind==='floor'?0:prot*Math.PI/2;
+  ghostRoot.children[0].children.forEach(m=>m.material=ok?gOK:gBad)}
+function addPiece(id,x,z,rot){
+  const def=PIECES.find(q=>q.id===id);if(!def)return;
+  const g=pmesh(def,pm(def));g.position.set(x,ground(x,z),z);g.rotation.y=def.kind==='floor'?0:rot*Math.PI/2;scene.add(g);
+  const o={id,x,z,rot,g,def,key:slot(def,[x,z],rot),solids:solidsFor(def,x,z,rot)};
+  g.userData.piece=o;placed.push(o);occ.set(o.key,o)}
+function place(){
+  if(!build||!gpos||!gpos.ok)return;const p=PIECES[psel];
+  for(const k in p.cost)inv[k]-=p.cost[k];
+  addPiece(p.id,gpos.c[0],gpos.c[1],prot);hudT=0}
+function demolish(){
+  if(!build)return;aim();
+  const hit=new T.Raycaster(_o.clone(),_a.clone(),0,12).intersectObjects(placed.map(p=>p.g),true)[0];if(!hit)return;
+  let o=hit.object;while(o&&!o.userData.piece)o=o.parent;if(!o)return;
+  const p=o.userData.piece;scene.remove(p.g);placed.splice(placed.indexOf(p),1);occ.delete(p.key);
+  for(const k in p.def.cost)inv[k]+=p.def.cost[k];hudT=0}
+function toggleBuild(){build=!build;ghostFor=-1;hudT=0}
+function cycPiece(n){psel=(psel+n+PIECES.length)%PIECES.length;ghostFor=-1;hudT=0}
+function rotPiece(){prot^=1;hudT=0}
+function hudBuild(){
+  const p=PIECES[psel],st=pStatus(p);
+  hx.font='13px system-ui';hx.fillStyle='#ffd27a';hx.fillText('BUILD MODE (B exits)',176,44);
+  hx.fillStyle='#fff';hx.font='bold 15px system-ui';hx.fillText(p.name,176,72);
+  hx.font='13px system-ui';hx.fillStyle='#bbb';hx.fillText(Object.entries(p.cost).map(([k,v])=>v+' '+k).join(', '),176,90);
+  hx.fillStyle=st==='Ready'?'#7dff9a':'#ff9a7d';hx.fillText(st,176,108);
+  hx.fillStyle='#8fa0ad';hx.font='11px system-ui';
+  hx.fillText(xr?'X/Y piece \u00b7 A rotate':'C piece \u00b7 E rotate',176,124);
+  hx.fillText(xr?'Trigger place \u00b7 Grip remove':'Click place \u00b7 X remove',176,136)}
+
+// ===== MODULE: town (buildings, villagers, soldiers) =====
+function cm(c){return mc['c'+c]||(mc['c'+c]=new T.MeshLambertMaterial({color:c}))}
+PIECES.push(
+  {id:'town_center',name:'Town Center',kind:'building',s:4,cost:{wood:10,stone:5},needs:'bench',parts:[[3.6,4.5,3.6,0,.75,0,0xb08a5a],[4.3,.5,4.3,0,3.25,0,0x7a3b2e],[.1,2,.1,0,4.5,0,0x6b4a2b],[.7,.45,.05,.4,5.2,0,0xd94a4a]]},
+  {id:'lumber_camp',name:'Lumber Camp',kind:'building',s:2,cost:{wood:6},needs:'bench',parts:[[1.8,.9,1.8,0,.45,0,0x8a6a3a],[1.6,.35,.5,0,1.05,.4,0x6b4a2b],[1.6,.35,.5,0,1.4,-.2,0x7b5a30]]},
+  {id:'mine_camp',name:'Mining Camp',kind:'building',s:2,cost:{wood:6,stone:3},needs:'pick',parts:[[1.8,1,1.8,0,.5,0,0x777c84],[.7,.5,.7,0,1.25,0,0xe0b83a]]},
+  {id:'barracks',name:'Barracks',kind:'building',s:4,cost:{wood:12,stone:8},needs:'tc',parts:[[3.8,3.9,3.8,0,.45,0,0x8b3a3a],[4.3,.4,4.3,0,2.6,0,0x4a2a2a]]});
+CFG.RECIPES.push(
+  {id:'villager',name:'Villager',cost:{wood:4},near:'town_center',unit:['v']},
+  {id:'swordsman',name:'Swordsman',cost:{wood:2,gold:3},near:'barracks',unit:['s','swordsman']},
+  {id:'spearman',name:'Spearman',cost:{wood:3,gold:2},near:'barracks',unit:['s','spearman']},
+  {id:'archer',name:'Archer',cost:{wood:4,gold:2},near:'barracks',unit:['s','archer']});
+const units=[],uBody=new T.CylinderGeometry(.22,.26,.9,6),uHead=new T.SphereGeometry(.17,8,6),
+  SOLD={swordsman:{col:0xc0392b,hp:60,atk:9},spearman:{col:0x2e6fd0,hp:50,atk:7},archer:{col:0x2f9d4a,hp:35,atk:6}},
+  JOBS=['tree','rock','gold'],JCOL={tree:0x8a5a2b,rock:0x7d838c,gold:0xe0b83a};
+function blocked(p,c){
+  if(p.kind!=='building')return false;
+  for(const q of placed){if(q.def.kind!=='building')continue;const h=(q.def.s+p.s)/2;if(Math.abs(q.x-c[0])<h&&Math.abs(q.z-c[1])<h)return true}
+  return false}
+function nearB(id){return placed.some(p=>p.id===id&&Math.hypot(p.x-_h.x,p.z-_h.z)<10)}
+function spawnUnit(kind,sub,x,z){
+  const n=units.filter(v=>v.kind==='v').length,job=JOBS[n%3],col=kind==='v'?JCOL[job]:SOLD[sub].col;
+  const g=new T.Group(),b=new T.Mesh(uBody,cm(col)),h=new T.Mesh(uHead,cm(0xd9a77f));
+  b.position.y=.45;h.position.y=1.08;g.add(b,h);
+  if(kind==='s'){
+    const w=sub==='spearman'?[.05,1.9,.05,.32,.95,0,0x8a5a2b]:sub==='archer'?[.05,.8,.05,.3,.85,.1,0x5a3a1a]:[.06,.7,.06,.32,.85,0,0xcfd3d8];
+    const m=new T.Mesh(bg(w[0],w[1],w[2]),cm(w[6]));m.position.set(w[3],w[4],w[5]);g.add(m)}
+  const u={kind,sub,g,x,z,job,state:'idle',t:0,tgt:null,carry:null,hp:kind==='s'?SOLD[sub].hp:20};
+  units.push(u);scene.add(g);return u}
+function spawnFor(r){
+  let b=null,bd=1e9;for(const p of placed)if(p.id===r.near){const d=Math.hypot(p.x-_h.x,p.z-_h.z);if(d<bd){bd=d;b=p}}
+  if(b)spawnUnit(r.unit[0],r.unit[1],b.x+(Math.random()-.5)*2,b.z+b.def.s/2+1.2+Math.random())}
+function jobFor(u){return u.job!=='tree'&&!placed.some(p=>p.id==='mine_camp')?'tree':u.job}
+function findRes(u){
+  const jt=jobFor(u);let best=null,bd=90;
+  for(const c of chunks.values())for(const r of c.res)if(r.alive&&r.type===jt){const d=Math.hypot(r.x-u.x,r.z-u.z);if(d<bd){bd=d;best=r}}
+  return best}
+function dropOff(u){
+  const ids=u.carry.g==='wood'?['lumber_camp','town_center']:['mine_camp','town_center'];let best=null,bd=1e9;
+  for(const p of placed)if(ids.includes(p.id)){const d=Math.hypot(p.x-u.x,p.z-u.z);if(d<bd){bd=d;best=p}}
+  return best}
+function updateUnits(dt){
+  let si=0;
+  for(const u of units){
+    let gx=u.x,gz=u.z,sp=2.4;
+    if(u.kind==='s'){const a=si*.9+.5,rad=2.5+Math.floor(si/6)*1.2;si++;gx=_h.x+Math.cos(a)*rad;gz=_h.z+Math.sin(a)*rad;sp=Math.min(7,2+Math.hypot(gx-u.x,gz-u.z))}
+    else{
+      u.t-=dt;
+      if(u.state==='idle'){if(u.t<=0){u.t=.6;u.tgt=findRes(u);if(u.tgt)u.state='go'}}
+      else if(u.state==='go'){const r=u.tgt;if(!r||!r.alive){u.state='idle';continue}
+        gx=r.x;gz=r.z;if(Math.hypot(r.x-u.x,r.z-u.z)<1.1){u.state='work';u.t=1.2}}
+      else if(u.state==='work'){const r=u.tgt;if(!r||!r.alive){u.state='idle';continue}
+        if(u.t<=0){u.t=1.2;r.hp-=1;if(r.hp<=0){r.alive=false;gone.add(r.key);const d=CFG.RES[r.type];u.carry={g:d.give,n:d.n};u.state='ret'}setInst(r)}}
+      else{const b=dropOff(u);if(!b){u.state='idle';continue}
+        gx=b.x;gz=b.z;if(Math.hypot(b.x-u.x,b.z-u.z)<b.def.s/2+.8){inv[u.carry.g]+=u.carry.n;u.carry=null;u.state='idle';hudT=0}}}
+    const dx=gx-u.x,dz=gz-u.z,d=Math.hypot(dx,dz);
+    if(d>(u.kind==='s'?.5:.12)){const st=Math.min(d,sp*dt);u.x+=dx/d*st;u.z+=dz/d*st;u.g.rotation.y=Math.atan2(dx,dz)}
+    u.g.position.set(u.x,ground(u.x,u.z),u.z)}}
+
+// ===== MODULE: mining =====
+const _o=new T.Vector3(),_a=new T.Vector3(),_v=new T.Vector3();
+function aim(){
+  if(xr&&held){held.getWorldPosition(_o);_a.set(0,0,-1).transformDirection(held.matrixWorld)}
+  else if(xr){const c=ctrls.find(c=>c.userData.hand==='right')||ctrls[0];c.getWorldPosition(_o);_a.set(0,0,-1).transformDirection(c.matrixWorld)}
+  else{camera.getWorldPosition(_o);camera.getWorldDirection(_a)}}
+function pick(){
+  aim();let best=null,bt=1e9;
+  for(const c of chunks.values())for(const r of c.res){if(!r.alive)continue;const d=CFG.RES[r.type];
+    _v.set(r.x,r.y+d.cy*r.s,r.z).sub(_o);const t=_v.dot(_a);if(t<.2||t>CFG.RANGE+1)continue;
+    if(_v.addScaledVector(_a,-t).length()<d.r*r.s&&t<bt){bt=t;best=r}}
+  return best}
+const mark=new T.Mesh(new T.RingGeometry(.5,.6,24),new T.MeshBasicMaterial({color:0xffd27a,side:T.DoubleSide,fog:false,depthTest:false}));
+mark.visible=false;mark.renderOrder=9;scene.add(mark);
+function mine(dt){ctrls.forEach(c=>{if(c.children[0])c.children[0].visible=build});toolRoot.visible=!build;if(build){mark.visible=false;targetName='';return}
+  const t=pick();targetName=(cur==='fist'?'Fists':cur==='axe'?'Axe':'Pickaxe')+(t?' \u00b7 '+(t.type==='tree'?'Tree ':'Rock ')+Math.round(t.hp/t.max*100)+'%':'');
+  mark.visible=!!t;if(t){mark.position.set(t.x,t.y+CFG.RES[t.type].cy*t.s,t.z);mark.scale.setScalar(t.s*1.4);mark.lookAt(_o)}
+  swing(dt)}
+
+// ----- held tool + manual swinging -----
+const toolRoot=new T.Group(),_tp=new T.Vector3(),_lp=new T.Vector3();
+let cur='fist',cd=0,anim=0,deskSwing=false,hasLast=false;
+const TH={axe:[0,0,-.55],pick:[0,0,-.55],fist:[0,0,-.08]},
+  tw=new T.MeshLambertMaterial({color:0x6b4a2b}),ts=new T.MeshLambertMaterial({color:0x8f949b}),tf=new T.MeshLambertMaterial({color:0xd9a77f});
+function part(g,geo,m,x,y,z){const o=new T.Mesh(geo,m);o.position.set(x,y,z);g.add(o)}
+function equip(k){
+  cur=k;toolRoot.clear();
+  if(k==='fist'){part(toolRoot,new T.SphereGeometry(.07,8,6),tf,0,0,-.05);return}
+  const h=new T.CylinderGeometry(.02,.02,.55,6);h.rotateX(Math.PI/2);part(toolRoot,h,tw,0,0,-.275);
+  if(k==='axe')part(toolRoot,new T.BoxGeometry(.16,.12,.04),ts,.07,0,-.52);
+  else part(toolRoot,new T.BoxGeometry(.4,.04,.05),ts,0,0,-.53)}
+function cycTool(){const o=['fist'];if(tools.axe)o.push('axe');if(tools.pick)o.push('pick');equip(o[(o.indexOf(cur)+1)%o.length]);hudT=0}
+function attachDesk(){camera.add(toolRoot);toolRoot.position.set(.3,-.3,-.35);toolRoot.rotation.set(0,0,0)}
+function hurt(r,a){r.hp-=a;if(r.hp<=0){r.alive=false;gone.add(r.key);const d=CFG.RES[r.type];inv[d.give]+=d.n;hudT=0}setInst(r)}
+function dmg(r){return(r.type==='tree'&&cur==='axe')||(r.type!=='tree'&&cur==='pick')?1:cur==='fist'?.25:.35}
+function hits(r){
+  if(r.type==='tree')return Math.hypot(_tp.x-r.x,_tp.z-r.z)<.3*r.s+.15&&_tp.y>r.y-.2&&_tp.y<r.y+2.4*r.s;
+  return _tp.distanceTo(_v.set(r.x,r.y+.4*r.s,r.z))<.85*r.s+.12}
+function buzz(){const c=ctrls.find(c=>c.userData.hand==='right');if(c&&c.userData.gp&&c.userData.gp.hapticActuators&&c.userData.gp.hapticActuators[0])c.userData.gp.hapticActuators[0].pulse(.7,60)}
+function swing(dt){
+  cd-=dt;anim=Math.max(0,anim-dt*5);
+  if(xr){
+    toolRoot.localToWorld(_tp.set(TH[cur][0],TH[cur][1],TH[cur][2]));
+    const sp=hasLast&&dt>0?_tp.distanceTo(_lp)/dt:0;_lp.copy(_tp);hasLast=true;
+    if(sp<2.2||cd>0)return;
+    for(const c of chunks.values())for(const r of c.res){if(r.alive&&hits(r)){hurt(r,dmg(r));cd=.4;buzz();return}}
+  }else{
+    toolRoot.rotation.x=-anim*1.1;
+    if(!deskSwing)return;deskSwing=false;if(cd>0)return;cd=.45;anim=1;
+    const r=pick();if(r&&Math.hypot(r.x-_o.x,r.y+CFG.RES[r.type].cy*r.s-_o.y,r.z-_o.z)<3.6)hurt(r,dmg(r))}}
+
+// ===== MODULE: locomotion =====
+const _f=new T.Vector3();
+function move(mx,mz,dt){
+  if(Math.abs(mx)<.15)mx=0;if(Math.abs(mz)<.15)mz=0;if(!mx&&!mz)return;
+  camera.getWorldDirection(_f);_f.y=0;_f.normalize();
+  rig.position.addScaledVector(_f,-mz*CFG.SPEED*dt);
+  rig.position.x+=-_f.z*mx*CFG.SPEED*dt;rig.position.z+=_f.x*mx*CFG.SPEED*dt}
+function snap(a){
+  camera.getWorldPosition(_h);const d=_h.clone().sub(rig.position),d2=d.clone().applyAxisAngle(Y,a);
+  rig.rotation.y+=a;rig.position.add(d.sub(d2))}
+
+// ===== MAIN LOOP =====
+const clock=new T.Clock();let hudT=0;
+renderer.setAnimationLoop(()=>{
+  const dt=Math.min(clock.getDelta(),.1);
+  if(xr){
+    const s=renderer.xr.getSession();
+    for(const src of s.inputSources){const a=src.gamepad&&src.gamepad.axes;if(!a||a.length<4)continue;
+      const b=src.gamepad.buttons;
+      if(src.handedness==='left'){move(a[2],a[3],dt);if(edge('L4',b[4]&&b[4].pressed))cyc(1);if(edge('L5',b[5]&&b[5].pressed))cyc(-1)}
+      if(src.handedness==='right'){if(edge('R4',b[4]&&b[4].pressed))craft();if(edge('R5',b[5]&&b[5].pressed))toggleBuild();if(build&&edge('R1',b[1]&&b[1].pressed))demolish();if(edge('R3',b[3]&&b[3].pressed))cycTool()}
+      if(src.handedness==='right'){if(Math.abs(a[2])>.7&&!latch){latch=true;snap(a[2]>0?-CFG.SNAP:CFG.SNAP)}else if(Math.abs(a[2])<.3)latch=false}}
+  }else{
+    rig.rotation.y=yaw;camera.rotation.x=pitch;camera.position.y=1.6;
+    move((keys.KeyD?1:0)-(keys.KeyA?1:0),(keys.KeyS?1:0)-(keys.KeyW?1:0),dt)}
+  camera.getWorldPosition(_h);{const c=collide(_h.x,_h.z);rig.position.x+=c[0]-_h.x;rig.position.z+=c[1]-_h.z;_h.x=c[0];_h.z=c[1]}rig.position.y=ground(_h.x,_h.z);
+  updateChunks(_h.x,_h.z);pump();mine(dt);updateGhost();updateUnits(dt);sky.position.set(_h.x,0,_h.z);
+  hudT-=dt;if(hudT<=0){hudT=.2;drawHud()}
+  renderer.render(scene,camera)});
+
+// ===== MODULE: start screen / VR session =====
+const ov=document.getElementById('ov'),vrb=document.getElementById('vr');
+document.getElementById('pl').onclick=()=>ov.hidden=true;
+renderer.xr.addEventListener('sessionstart',()=>{xr=true;ov.hidden=true;hc.style.display='none'});
+renderer.xr.addEventListener('sessionend',()=>{xr=false;ov.hidden=false;hc.style.display='';held=null;attachDesk()});
+if(navigator.xr){navigator.xr.isSessionSupported('immersive-vr').then(ok=>{
+  vrb.textContent=ok?'Enter VR':'VR not available here';vrb.disabled=!ok;
+  vrb.onclick=async()=>{try{renderer.xr.setSession(await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']}))}catch(e){vrb.textContent='VR failed to start'}}
+}).catch(()=>vrb.textContent='VR not available here')}else vrb.textContent='VR not available here';
+// ===== MODULE: save / load (browser storage, per device) =====
+const SK='civvr-v1';
+function save(){try{localStorage.setItem(SK,JSON.stringify({inv,tools,bn:benches.map(b=>[b.x,b.z]),v:2,pc:placed.map(p=>[p.id,p.x,p.z,p.rot]),un:units.map(u=>[u.kind,u.sub]),gone:[...gone],p:[rig.position.x,rig.position.z],yaw}))}catch(e){}}
+try{const s=JSON.parse(localStorage.getItem(SK)||'null');
+  if(s){Object.assign(inv,s.inv);Object.assign(tools,s.tools||{});(s.bn||[]).forEach(b=>addBench(b[0],b[1]));(s.pc||[]).forEach(a=>addPiece(a[0],a[1],a[2],a[3]));(s.un||[]).forEach((a,i)=>spawnUnit(a[0],a[1],s.p[0]+2+i*.5,s.p[1]+2));(s.v===2?s.gone:[]).forEach(k=>gone.add(k));rig.position.x=s.p[0];rig.position.z=s.p[1];yaw=s.yaw||0;rig.rotation.y=yaw}}catch(e){}
+equip(tools.axe?'axe':tools.pick?'pick':'fist');attachDesk();setInterval(save,5000);addEventListener('pagehide',save);
+updateChunks(rig.position.x,rig.position.z);while(pending.length)pump();
+drawHud();
+</script>
+</body>
+</html>
