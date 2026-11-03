@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Aether Link</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #050510; font-family: "Segoe UI", system-ui, -apple-system, sans-serif; touch-action: none; }
+    canvas { display: block; width: 100%; height: 100%; }
+
+    /* Magical system HUD */
+    #hud { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; color: #e8f0ff; }
+    #top-bar { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+    .panel {
+      background: linear-gradient(135deg, rgba(10, 20, 45, 0.88), rgba(15, 10, 35, 0.9));
+      border: 1px solid rgba(100, 180, 255, 0.45);
+      border-radius: 4px 12px 4px 12px;
+      padding: 8px 12px; font-size: 12px; line-height: 1.4;
+      box-shadow: 0 0 12px rgba(60, 140, 255, 0.15), inset 0 0 20px rgba(40, 100, 200, 0.08);
+      backdrop-filter: blur(6px);
+    }
+    .panel h2 {
+      font-size: 10px; color: #7ec8ff; margin-bottom: 4px; letter-spacing: 0.12em;
+      text-transform: uppercase; font-weight: 600;
+      text-shadow: 0 0 8px rgba(100, 180, 255, 0.5);
+    }
+    .bar-bg { width: 130px; height: 8px; background: rgba(0,10,30,0.8); border-radius: 2px; overflow: hidden; margin-top: 3px; border: 1px solid rgba(80,140,220,0.3); }
+    .bar-fill { height: 100%; border-radius: 1px; transition: width 0.12s; box-shadow: 0 0 6px currentColor; }
+    #hp-fill { background: linear-gradient(90deg, #e63946, #ff8fa3); }
+    #mp-fill { background: linear-gradient(90deg, #3a6bff, #a78bfa); }
+    #enemy-fill { background: linear-gradient(90deg, #f72585, #ff6b9d); }
+    #xp-fill { background: linear-gradient(90deg, #f4a261, #ffe566); }
+    #charge-fill { background: linear-gradient(90deg, #ff9f1c, #ff5a00); width: 0%; }
+
+    #spell-bar { position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; pointer-events: auto; }
+    .spell-btn {
+      width: 64px; height: 64px; border-radius: 8px;
+      border: 1px solid rgba(120, 190, 255, 0.4);
+      background: linear-gradient(180deg, rgba(20, 35, 70, 0.92), rgba(12, 18, 40, 0.95));
+      color: #e0eeff; font-size: 10px; font-weight: 600;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.15s; user-select: none; -webkit-tap-highlight-color: transparent;
+      box-shadow: 0 0 10px rgba(60, 140, 255, 0.12);
+    }
+    .spell-btn .icon { font-size: 20px; margin-bottom: 2px; filter: drop-shadow(0 0 4px rgba(150,200,255,0.6)); }
+    .spell-btn.selected {
+      border-color: #7ec8ff;
+      box-shadow: 0 0 16px rgba(100, 200, 255, 0.45), inset 0 0 12px rgba(80, 160, 255, 0.15);
+      background: linear-gradient(180deg, rgba(30, 50, 90, 0.95), rgba(20, 30, 60, 0.98));
+    }
+    .spell-btn:active { transform: scale(0.94); }
+    .spell-btn.disabled { opacity: 0.35; pointer-events: none; }
+    .spell-btn.empty { opacity: 0.35; border-style: dashed; }
+
+    #center-msg {
+      position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%);
+      font-size: 18px; font-weight: 700; text-align: center;
+      color: #c8e4ff;
+      text-shadow: 0 0 12px rgba(80, 160, 255, 0.8), 0 2px 8px #000;
+      opacity: 0; transition: opacity 0.25s; pointer-events: none; z-index: 30;
+      letter-spacing: 0.04em;
+      border: 1px solid rgba(100, 180, 255, 0.35);
+      background: rgba(8, 16, 40, 0.75);
+      padding: 12px 22px; border-radius: 4px 14px;
+    }
+    #center-msg.show { opacity: 1; }
+
+    #controls-hint {
+      position: absolute; bottom: 14px; left: 12px; right: 12px;
+      text-align: center; font-size: 11px; color: #8aa8c8; opacity: 0.85;
+    }
+
+    #vr-container { position: absolute; bottom: 68px; left: 50%; transform: translateX(-50%); z-index: 20; pointer-events: auto; }
+    #restart-btn, #spellbook-btn, #mission-btn {
+      position: absolute; z-index: 25; padding: 7px 14px; border-radius: 4px 10px;
+      border: 1px solid rgba(100, 180, 255, 0.5);
+      background: linear-gradient(135deg, rgba(15, 30, 60, 0.92), rgba(20, 20, 50, 0.95));
+      color: #b8d4ff; font-size: 12px; cursor: pointer; pointer-events: auto;
+      box-shadow: 0 0 10px rgba(60, 140, 255, 0.2);
+    }
+    #restart-btn { top: 12px; right: 12px; display: none; }
+    #spellbook-btn { top: 12px; right: 100px; }
+    #mission-btn { top: 12px; right: 200px; }
+    #restart-btn:hover, #spellbook-btn:hover, #mission-btn:hover {
+      background: linear-gradient(135deg, rgba(30, 50, 90, 0.95), rgba(40, 40, 80, 0.98));
+      border-color: #7ec8ff;
+    }
+
+    #audio-unlock {
+      position: absolute; inset: 0; background: radial-gradient(ellipse at center, rgba(15,25,55,0.95), rgba(5,5,16,0.98));
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 100; color: #e0e0ff; text-align: center; padding: 20px; pointer-events: auto;
+    }
+    #audio-unlock button {
+      margin-top: 18px; padding: 12px 32px; font-size: 15px; border-radius: 4px 12px;
+      border: 1px solid rgba(120, 200, 255, 0.6);
+      background: linear-gradient(135deg, #2a5a9e, #3d7ad6);
+      color: #e8f4ff; font-weight: 700; cursor: pointer;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      box-shadow: 0 0 20px rgba(60, 140, 255, 0.35);
+    }
+
+    /* System menus */
+    #spellbook, #missions {
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse at 30% 20%, rgba(20,40,80,0.92), rgba(4,8,20,0.94));
+      display: none; z-index: 50; pointer-events: auto; overflow-y: auto; padding: 16px 12px 40px;
+    }
+    #spellbook.open, #missions.open { display: block; }
+    .sb-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
+    .sb-header h1 {
+      font-size: 20px; color: #9ad4ff; letter-spacing: 0.1em; text-transform: uppercase;
+      text-shadow: 0 0 14px rgba(100, 180, 255, 0.6);
+    }
+    .sb-close {
+      padding: 8px 16px; border-radius: 4px 10px;
+      border: 1px solid rgba(100, 180, 255, 0.5);
+      background: rgba(20, 35, 70, 0.9); color: #b8d4ff; font-size: 13px; cursor: pointer;
+    }
+    .sb-stats { font-size: 13px; color: #a0c0e8; margin-bottom: 12px; }
+    .sb-section { margin-bottom: 18px; }
+    .sb-section h2 {
+      font-size: 13px; color: #7ec8ff; margin-bottom: 8px; letter-spacing: 0.08em; text-transform: uppercase;
+      border-bottom: 1px solid rgba(80, 140, 220, 0.35); padding-bottom: 4px;
+    }
+    .spell-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+    .spell-card {
+      background: linear-gradient(160deg, rgba(15, 30, 60, 0.95), rgba(20, 20, 50, 0.95));
+      border: 1px solid rgba(100, 160, 255, 0.3); border-radius: 6px 12px; padding: 10px; font-size: 12px; cursor: pointer;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .spell-card:hover { border-color: #7ec8ff; box-shadow: 0 0 12px rgba(80, 160, 255, 0.25); }
+    .spell-card.locked { opacity: 0.5; cursor: default; }
+    .spell-card.equipped { border-color: #5eead4; box-shadow: 0 0 10px rgba(94, 234, 212, 0.3); }
+    .spell-card .sc-name { font-weight: 700; color: #c8e4ff; margin-bottom: 3px; }
+    .spell-card .sc-meta { color: #7a9ab8; font-size: 11px; }
+    .spell-card .sc-desc { color: #a0b8d0; margin-top: 4px; font-size: 11px; line-height: 1.3; }
+    .spell-card .sc-action { margin-top: 6px; font-size: 11px; color: #7dd3fc; font-weight: 600; }
+    .loadout-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .loadout-slot {
+      width: 70px; height: 56px; border-radius: 6px 10px;
+      border: 1px dashed rgba(120, 180, 255, 0.35);
+      background: rgba(10, 20, 45, 0.85);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; color: #6a8aaa;
+    }
+    .loadout-slot.filled { border-style: solid; border-color: #7ec8ff; color: #c8e4ff; }
+    .skill-node {
+      display: inline-block; padding: 6px 10px; margin: 3px; border-radius: 4px 8px;
+      background: rgba(15, 30, 60, 0.9); border: 1px solid rgba(100, 150, 220, 0.4);
+      font-size: 11px; cursor: pointer; color: #b0c8e8;
+    }
+    .skill-node.unlocked { border-color: #5eead4; color: #a7f3d0; }
+    .skill-node.available { border-color: #7ec8ff; color: #bae6fd; box-shadow: 0 0 8px rgba(100, 180, 255, 0.3); }
+    .skill-node.locked { opacity: 0.4; cursor: default; }
+    .sb-note { font-size: 11px; color: #6a8ab0; margin-top: 6px; }
+    .combo-card {
+      background: rgba(30, 20, 50, 0.9); border: 1px solid rgba(180, 140, 255, 0.35);
+      border-radius: 6px 12px; padding: 10px; font-size: 12px; margin-bottom: 8px;
+    }
+    .combo-card.known { border-color: #c4b5fd; }
+    .combo-card .cc-name { font-weight: 700; color: #e9d5ff; }
+    .combo-card .cc-req { color: #8a7aaa; font-size: 11px; margin-top: 2px; }
+    .combo-card .cc-how { color: #b0a0c8; margin-top: 4px; font-size: 11px; }
+    .mission-card {
+      background: linear-gradient(160deg, rgba(15, 30, 60, 0.95), rgba(20, 25, 50, 0.95));
+      border: 1px solid rgba(100, 160, 255, 0.35); border-radius: 6px 12px; padding: 12px; margin-bottom: 10px;
+    }
+    .mission-card.active { border-color: #7ec8ff; box-shadow: 0 0 12px rgba(100, 180, 255, 0.25); }
+    .mission-card.done { border-color: #5eead4; opacity: 0.85; }
+    .mission-card h3 { color: #9ad4ff; font-size: 14px; margin-bottom: 4px; letter-spacing: 0.04em; }
+    .mission-card .m-desc { color: #a0b8d0; font-size: 12px; margin-bottom: 6px; }
+    .mission-card .m-prog { color: #7ec8ff; font-size: 12px; margin-bottom: 6px; }
+    .mission-card .m-rew { color: #a7f3d0; font-size: 11px; margin-bottom: 8px; }
+    .mission-card button {
+      padding: 6px 14px; border-radius: 4px 8px;
+      border: 1px solid rgba(100, 180, 255, 0.5);
+      background: rgba(30, 50, 90, 0.9); color: #c8e4ff; font-size: 12px; cursor: pointer;
+    }
+    .mission-card button:hover { border-color: #7ec8ff; background: rgba(40, 70, 120, 0.95); }
+
+    /* Floating damage numbers */
+    .dmg-float {
+      position: absolute; pointer-events: none; z-index: 40;
+      font-weight: 800; font-size: 18px; color: #ffb4c0;
+      text-shadow: 0 0 8px #ff4466, 0 1px 3px #000;
+      animation: dmgUp 0.85s ease-out forwards;
+    }
+    .dmg-float.crit { color: #ffe566; font-size: 22px; text-shadow: 0 0 10px #ffaa00, 0 1px 3px #000; }
+    .dmg-float.heal { color: #7dffb3; text-shadow: 0 0 8px #22cc66; }
+    @keyframes dmgUp {
+      0% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+      100% { opacity: 0; transform: translate(-50%, -48px) scale(1.15); }
+    }
+
+    body.xr-presenting #spell-bar,
+    body.xr-presenting #controls-hint,
+    body.xr-presenting #vr-container,
+    body.xr-presenting #spellbook-btn,
+    body.xr-presenting #mission-btn { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="audio-unlock">
+    <div style="font-size:20px;font-weight:700;margin-bottom:8px;">Aether Link</div>
+    <div style="max-width:320px;line-height:1.45;opacity:0.9;">A magical combat link<br>Cast · Grow · Clear arenas<br>Phone · Desktop · Quest 2</div>
+    <button id="start-btn">Enter the Link</button>
+  </div>
+  <div id="hud" style="display:none;">
+    <div id="top-bar">
+      <div class="panel"><h2>Player · Lv <span id="player-level">1</span></h2>
+        HP <div class="bar-bg"><div id="hp-fill" class="bar-fill" style="width:100%"></div></div>
+        MP <div class="bar-bg"><div id="mp-fill" class="bar-fill" style="width:100%"></div></div>
+        XP <div class="bar-bg"><div id="xp-fill" class="bar-fill" style="width:0%"></div></div>
+        Charge <div class="bar-bg"><div id="charge-fill" class="bar-fill"></div></div>
+      </div>
+      <div class="panel"><h2>Enemy</h2>
+        HP <div class="bar-bg"><div id="enemy-fill" class="bar-fill" style="width:100%"></div></div>
+        <div id="enemy-status" style="margin-top:3px;font-size:11px;color:#f8a;">Training Dummy</div>
+      </div>
+      <div class="panel" style="font-size:11px;">
+        <div>Spell: <span id="spell-name">Fireball</span></div>
+        <div id="mana-cost" style="opacity:0.8;">Cost: 12 MP</div>
+        <div id="vr-hint" style="margin-top:3px;font-size:10px;color:#9cf;display:none;">Hold Trigger to charge<br>Grip = Lightning</div>
+      </div>
+    </div>
+    <div id="center-msg"></div>
+    <div id="spell-bar"></div>
+    <div id="controls-hint">N = Wave · M = Arena · J = Missions · B = Spellbook · Stick/WASD move<br>Take jobs on the Mission Board for XP & skill points</div>
+  </div>
+  <button id="restart-btn">Restart</button>
+  <button id="spellbook-btn">Skills (B)</button>
+  <button id="mission-btn">Quests (J)</button>
+  <div id="vr-container"></div>
+  
+  <div id="missions">
+    <div class="sb-header"><h1>Quest Board</h1><button class="sb-close" id="missions-close">Close</button></div>
+    <div class="sb-stats" id="missions-stats"></div>
+    <div class="sb-note" style="margin-bottom:12px;">Take jobs between fights. Progress counts while you grind or clear waves. Claim rewards when complete.</div>
+    <div id="mission-list"></div>
+  </div>
+
+  <div id="spellbook">
+    <div class="sb-header"><h1>Spellbook</h1><button class="sb-close" id="sb-close">Close</button></div>
+    <div class="sb-stats" id="sb-stats"></div>
+    <div class="sb-section"><h2>Equipped Loadout (max 4)</h2><div class="loadout-row" id="loadout-display"></div>
+      <div class="sb-note">Tap equipped spell to unequip. Tap unlocked spell to equip into empty slot.</div></div>
+    <div class="sb-section"><h2>Skill Tree – Fire / Ice / Lightning</h2><div id="skill-tree"></div>
+      <div class="sb-note">Spend skill points from level-ups. Future schools will appear here later.</div></div>
+    <div class="sb-section"><h2>All Spells</h2><div class="spell-grid" id="spell-list"></div></div>
+  </div>
+  <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.170.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.170.0/examples/jsm/"}}</script>
+  <script type="module">
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+const SCHOOLS = {
+  fire:{id:'fire',name:'Fire',color:0xff5a00,unlocked:true},
+  ice:{id:'ice',name:'Ice',color:0x66ddff,unlocked:true},
+  lightning:{id:'lightning',name:'Lightning',color:0x88ccff,unlocked:true},
+  earth:{id:'earth',name:'Earth',color:0x8b7355,unlocked:false},
+  wind:{id:'wind',name:'Wind',color:0xa8e6cf,unlocked:true},
+  shadow:{id:'shadow',name:'Shadow',color:0x5c4d7a,unlocked:false},
+  gravity:{id:'gravity',name:'Gravity',color:0x9b59b6,unlocked:false},
+  time:{id:'time',name:'Time',color:0xf1c40f,unlocked:false},
+  healing:{id:'healing',name:'Healing',color:0x2ecc71,unlocked:false},
+  light:{id:'light',name:'Light',color:0xf9e79f,unlocked:false},
+  summoning:{id:'summoning',name:'Summoning',color:0xe67e22,unlocked:false}
+};
+
+const SPELL_DEFS = [
+  {id:'fireball',name:'Fireball',school:'fire',tier:1,icon:'🔥',cost:12,maxCost:28,speed:13,damage:14,type:'fire',chargeable:true,cooldown:0.4,desc:'Chargeable fire projectile. Higher charge = bigger boom.',unlock:{type:'default'}},
+  {id:'fireball_ii',name:'Greater Fireball',school:'fire',tier:2,icon:'🔥',cost:18,maxCost:36,speed:14,damage:22,type:'fire',chargeable:true,cooldown:0.55,desc:'Stronger charged fireball with larger explosion.',unlock:{type:'skill',skill:'fire_power'}},
+  {id:'ice_shard',name:'Ice Shard',school:'ice',tier:1,icon:'❄️',cost:11,maxCost:22,speed:15,damage:9,type:'ice',chargeable:true,cooldown:0.4,desc:'Chargeable ice that freezes the target briefly.',unlock:{type:'default'}},
+  {id:'ice_shard_ii',name:'Glacial Spike',school:'ice',tier:2,icon:'❄️',cost:16,maxCost:30,speed:16,damage:15,type:'ice',chargeable:true,cooldown:0.5,desc:'Heavier ice spike with longer freeze.',unlock:{type:'skill',skill:'ice_power'}},
+  {id:'lightning',name:'Lightning Beam',school:'lightning',tier:1,icon:'⚡',cost:8,maxCost:8,speed:0,damage:9,type:'lightning',chargeable:false,cooldown:0.2,desc:'Hold to sustain a damaging beam. Drains mana over time.',unlock:{type:'default'}},
+  {id:'lightning_ii',name:'Storm Beam',school:'lightning',tier:2,icon:'⚡',cost:10,maxCost:10,speed:0,damage:14,type:'lightning',chargeable:false,cooldown:0.25,desc:'Stronger sustained beam with higher tick damage.',unlock:{type:'skill',skill:'lightning_power'}},
+  {id:'wind_gust',name:'Wind Gust',school:'wind',tier:1,icon:'💨',cost:10,maxCost:20,speed:18,damage:8,type:'wind',chargeable:true,cooldown:0.35,desc:'Fast air blast. Combine with Fire soon after for Inferno Tornado.',unlock:{type:'default'}}
+];
+const COMBO_DEFS = [
+  {id:'inferno_tornado',name:'Inferno Tornado',schools:['fire','wind'],desc:'Cast Fire then Wind (or reverse) within 1.6s. A swirling fire vortex travels forward, damaging over time.',how:'Equip Fire + Wind. Cast one, then the other quickly.',discoverHint:'Fire + Wind in quick succession'},
+  {id:'shatterstorm',name:'Shatterstorm',schools:['ice','lightning'],desc:'Lightning striking a frozen enemy deals heavy bonus damage and a shatter burst.',how:'Freeze the enemy with Ice, then hit it with Lightning while frozen.',discoverHint:'Lightning on a frozen foe'}
+];
+
+const SKILL_DEFS = [
+  {id:'fire_power',name:'Fire Power',school:'fire',cost:1,desc:'Unlock Greater Fireball',requires:[]},
+  {id:'ice_power',name:'Ice Power',school:'ice',cost:1,desc:'Unlock Glacial Spike',requires:[]},
+  {id:'lightning_power',name:'Lightning Power',school:'lightning',cost:1,desc:'Unlock Storm Beam',requires:[]}
+];
+
+const MAX_LOADOUT = 4;
+const XP_TABLE = [0,40,90,150,220,300,400,520,660,820];
+function xpForLevel(lv){ if(lv<=1)return 0; if(lv-1<XP_TABLE.length)return XP_TABLE[lv-1]; return XP_TABLE[XP_TABLE.length-1]+(lv-XP_TABLE.length)*200; }
+
+const defaultProgress = ()=>({level:1,xp:0,skillPoints:0,unlockedSpells:['fireball','ice_shard','lightning','wind_gust'],unlockedSkills:[],loadout:['fireball','lightning','ice_shard','wind_gust'],discoveredCombos:[]});
+let progress = defaultProgress();
+
+function loadProgress(){
+  try{
+    if(typeof localStorage==='undefined')return;
+    const raw=localStorage.getItem('wizardProgress_v1');
+    if(!raw)return;
+    const data=JSON.parse(raw);
+    progress={...defaultProgress(),...data};
+    if(!Array.isArray(progress.unlockedSpells))progress.unlockedSpells=defaultProgress().unlockedSpells;
+    if(!Array.isArray(progress.loadout))progress.loadout=defaultProgress().loadout;
+    if(!Array.isArray(progress.unlockedSkills))progress.unlockedSkills=[];
+    if(!Array.isArray(progress.discoveredCombos))progress.discoveredCombos=[];
+    if(!progress.missions)progress.missions={};
+    if(!progress.missionStats)progress.missionStats={kills:0,killsByType:{},wavesCleared:0,arenasVisited:[]};
+    progress.level=Math.max(1,progress.level|0);
+    progress.xp=Math.max(0,progress.xp|0);
+    progress.skillPoints=Math.max(0,progress.skillPoints|0);
+  }catch(e){progress=defaultProgress();}
+}
+function saveProgress(){
+  try{if(typeof localStorage!=='undefined')localStorage.setItem('wizardProgress_v1',JSON.stringify(progress));}catch(e){}
+}
+function isSpellUnlocked(id){return progress.unlockedSpells.includes(id);}
+function getSpellDef(id){return SPELL_DEFS.find(s=>s.id===id);}
+function addXP(amount){
+  progress.xp+=amount;
+  let leveled=false;
+  while(progress.xp>=xpForLevel(progress.level+1)){progress.level+=1;progress.skillPoints+=1;leveled=true;}
+  saveProgress();updateHud();
+  if(leveled){showMessage(`Level Up! Lv ${progress.level}\n+1 Skill Point`,2.5);playSound('levelup');}
+  return leveled;
+}
+function unlockSpell(id){if(isSpellUnlocked(id))return;progress.unlockedSpells.push(id);saveProgress();}
+function tryUnlockSkill(skillId){
+  const skill=SKILL_DEFS.find(s=>s.id===skillId);
+  if(!skill||progress.unlockedSkills.includes(skillId))return false;
+  if(progress.skillPoints<skill.cost){showMessage('Not enough skill points',1.2);return false;}
+  for(const req of skill.requires){if(!progress.unlockedSkills.includes(req)){showMessage('Requires previous skill',1.2);return false;}}
+  progress.skillPoints-=skill.cost;progress.unlockedSkills.push(skillId);
+  SPELL_DEFS.forEach(sp=>{if(sp.unlock&&sp.unlock.type==='skill'&&sp.unlock.skill===skillId)unlockSpell(sp.id);});
+  saveProgress();showMessage(`Unlocked: ${skill.name}`,1.8);playSound('unlock');renderSpellbook();rebuildSpellBar();return true;
+}
+function equipSpell(id){
+  if(!isSpellUnlocked(id)||progress.loadout.includes(id))return;
+  if(progress.loadout.length>=MAX_LOADOUT){showMessage('Loadout full (max 4)',1.2);return;}
+  progress.loadout.push(id);saveProgress();renderSpellbook();rebuildSpellBar();
+}
+function unequipSpell(id){
+  const idx=progress.loadout.indexOf(id);if(idx===-1)return;
+  if(progress.loadout.length<=1){showMessage('Keep at least one spell',1.2);return;}
+  progress.loadout.splice(idx,1);
+  if(state.selectedLoadoutIndex>=progress.loadout.length)state.selectedLoadoutIndex=0;
+  saveProgress();renderSpellbook();rebuildSpellBar();
+}
+
+const state={playerHp:100,playerMaxHp:100,playerMp:100,playerMaxMp:100,enemyHp:80,enemyMaxHp:80,selectedLoadoutIndex:0,frozenUntil:0,gameOver:false,audioReady:false,lastAttack:0,enemyAttackCooldown:2.4,isPresenting:false,inCombat:false,spellbookOpen:false,isCharging:false,charge:0,chargeSpellId:null,chargeOrigin:null,chargeDirection:null,chargeSource:null,lightningActive:false,lightningSource:null,lightningSpellId:null,cooldown:{},recentCasts:[],activeTornadoes:[],wave:0,maxWaves:5,mode:'intro',enemies:[],grindKills:0,waveAnnounce:0};
+const CHARGE_TIME=1.15;const LIGHTNING_TICK=0.12;let lightningTickTimer=0;
+function currentSpell(){const id=progress.loadout[state.selectedLoadoutIndex];return getSpellDef(id)||SPELL_DEFS[0];}
+
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x07071a);scene.fog=new THREE.FogExp2(0x07071a,0.028);
+const camera=new THREE.PerspectiveCamera(70,window.innerWidth/window.innerHeight,0.08,80);camera.position.set(0,1.55,4.5);
+// Dolly / player rig for VR + desktop locomotion
+const dolly=new THREE.Group();
+dolly.position.set(0,0,4.5);
+dolly.add(camera);
+camera.position.set(0,1.55,0);
+scene.add(dolly);
+const _moveFwd=new THREE.Vector3();
+const _moveRight=new THREE.Vector3();
+const _stick=new THREE.Vector2();
+
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance',alpha:false});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.75));renderer.setSize(window.innerWidth,window.innerHeight);renderer.xr.enabled=true;renderer.outputColorSpace=THREE.SRGBColorSpace;document.body.appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0x334466,0.55));
+const moon=new THREE.DirectionalLight(0x99aaff,0.7);moon.position.set(-6,12,-4);scene.add(moon);
+const fill=new THREE.PointLight(0xff8844,0.55,18);fill.position.set(2,3.5,1);scene.add(fill);
+const rim=new THREE.PointLight(0x4488ff,0.4,14);rim.position.set(-3,2.5,-5);scene.add(rim);
+
+const ground=new THREE.Mesh(new THREE.CircleGeometry(22,48),new THREE.MeshStandardMaterial({color:0x1a2e1a,roughness:0.92,metalness:0.05}));ground.rotation.x=-Math.PI/2;scene.add(ground);
+const ring=new THREE.Mesh(new THREE.RingGeometry(5.5,6.2,48),new THREE.MeshBasicMaterial({color:0x336644,transparent:true,opacity:0.35,side:THREE.DoubleSide}));ring.rotation.x=-Math.PI/2;ring.position.y=0.02;scene.add(ring);
+function makeTree(x,z,scale=1){const g=new THREE.Group();const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.12*scale,0.18*scale,1.1*scale,6),new THREE.MeshStandardMaterial({color:0x3a2a1a,roughness:0.9}));trunk.position.y=0.55*scale;g.add(trunk);const fm=new THREE.MeshStandardMaterial({color:0x1a4a2a,roughness:0.85,flatShading:true});for(let i=0;i<3;i++){const c=new THREE.Mesh(new THREE.ConeGeometry((0.7-i*0.15)*scale,1.1*scale,6),fm);c.position.y=1.3*scale+i*0.55*scale;g.add(c);}g.position.set(x,0,z);scene.add(g);}
+for(let i=0;i<14;i++){const a=(i/14)*Math.PI*2;const r=9+Math.random()*3.5;makeTree(Math.cos(a)*r,Math.sin(a)*r,0.85+Math.random()*0.45);}
+makeTree(-6.5,-3,1.1);makeTree(7,-2.5,0.95);makeTree(-4,7.5,1.2);
+function makeRock(x,z,s=1){const r=new THREE.Mesh(new THREE.DodecahedronGeometry(0.35*s,0),new THREE.MeshStandardMaterial({color:0x4a4a55,roughness:0.8,flatShading:true}));r.position.set(x,0.2*s,z);r.rotation.set(Math.random(),Math.random(),Math.random());scene.add(r);}
+makeRock(-2.8,1.5,1.1);makeRock(3.2,-1.2,0.9);makeRock(-1.5,-3.8,1.3);makeRock(4.5,2.8,0.75);makeRock(0.8,4.2,1.0);
+function makePillar(x,z,h=2.8){const p=new THREE.Mesh(new THREE.BoxGeometry(0.45,h,0.45),new THREE.MeshStandardMaterial({color:0x3a3545,roughness:0.88}));p.position.set(x,h/2,z);scene.add(p);const rune=new THREE.Mesh(new THREE.PlaneGeometry(0.28,0.28),new THREE.MeshBasicMaterial({color:0x66aaff,transparent:true,opacity:0.7,side:THREE.DoubleSide}));rune.position.set(x,h*0.6,z+0.24);scene.add(rune);}
+makePillar(-8,-11,3.2);makePillar(-6.2,-11.4,2.6);makePillar(7.5,-10.5,3.0);makePillar(9.2,-10.8,2.4);
+const arch=new THREE.Mesh(new THREE.TorusGeometry(1.6,0.18,6,10,Math.PI),new THREE.MeshStandardMaterial({color:0x3a3545,roughness:0.9}));arch.position.set(-7.1,2.9,-11.2);arch.rotation.y=Math.PI/2;scene.add(arch);
+const crystals=[];for(let i=0;i<7;i++){const c=new THREE.Mesh(new THREE.OctahedronGeometry(0.18+Math.random()*0.12,0),new THREE.MeshStandardMaterial({color:new THREE.Color().setHSL(0.55+Math.random()*0.12,0.75,0.55),emissive:0x2244aa,emissiveIntensity:0.45,roughness:0.25}));c.position.set((Math.random()-0.5)*12,1.2+Math.random()*2.2,(Math.random()-0.5)*10-2);c.userData.spin=0.4+Math.random()*0.6;c.userData.bob=Math.random()*Math.PI*2;scene.add(c);crystals.push(c);}
+
+const handsGroup=new THREE.Group();camera.add(handsGroup);
+function makeDesktopHand(isLeft){const g=new THREE.Group();const palm=new THREE.Mesh(new THREE.SphereGeometry(0.07,10,10),new THREE.MeshBasicMaterial({color:0xffaa55,transparent:true,opacity:0.55}));g.add(palm);for(let i=0;i<3;i++){const spark=new THREE.Mesh(new THREE.SphereGeometry(0.018,6,6),new THREE.MeshBasicMaterial({color:0xffee88}));spark.userData.angle=(i/3)*Math.PI*2;spark.userData.radius=0.11;g.add(spark);}g.position.set(isLeft?-0.22:0.22,-0.18,-0.45);g.userData.palm=palm;return g;}
+const leftHand=makeDesktopHand(true);const rightHand=makeDesktopHand(false);handsGroup.add(leftHand);handsGroup.add(rightHand);
+const spellCircle=new THREE.Group();spellCircle.visible=false;
+const circleRing=new THREE.Mesh(new THREE.RingGeometry(0.16,0.22,32),new THREE.MeshBasicMaterial({color:0xff9f1c,transparent:true,opacity:0.7,side:THREE.DoubleSide}));circleRing.rotation.x=Math.PI/2;spellCircle.add(circleRing);
+const circleRing2=new THREE.Mesh(new THREE.RingGeometry(0.24,0.27,32),new THREE.MeshBasicMaterial({color:0xffcc66,transparent:true,opacity:0.4,side:THREE.DoubleSide}));circleRing2.rotation.x=Math.PI/2;spellCircle.add(circleRing2);
+for(let i=0;i<6;i++){const rune=new THREE.Mesh(new THREE.PlaneGeometry(0.05,0.08),new THREE.MeshBasicMaterial({color:0xffeebb,transparent:true,opacity:0.85,side:THREE.DoubleSide}));const a=(i/6)*Math.PI*2;rune.position.set(Math.cos(a)*0.2,0,Math.sin(a)*0.2);rune.rotation.x=-Math.PI/2;rune.rotation.z=-a;spellCircle.add(rune);}
+rightHand.add(spellCircle);spellCircle.position.set(0,0.02,0);
+
+const enemy=new THREE.Group();scene.add(enemy);
+const bodyMat=new THREE.MeshStandardMaterial({color:0x6b2d8b,emissive:0x3a1055,emissiveIntensity:0.45,roughness:0.35,flatShading:true});
+const body=new THREE.Mesh(new THREE.IcosahedronGeometry(0.65,1),bodyMat);enemy.add(body);
+const eye=new THREE.Mesh(new THREE.SphereGeometry(0.2,12,12),new THREE.MeshBasicMaterial({color:0xffee66}));eye.position.set(0,0.18,0.48);enemy.add(eye);
+const pupil=new THREE.Mesh(new THREE.SphereGeometry(0.08,8,8),new THREE.MeshBasicMaterial({color:0x110011}));pupil.position.z=0.12;eye.add(pupil);
+const hornMat=new THREE.MeshStandardMaterial({color:0x2a1a3a,roughness:0.7});
+[-1,1].forEach(side=>{const horn=new THREE.Mesh(new THREE.ConeGeometry(0.1,0.45,5),hornMat);horn.position.set(side*0.32,0.55,-0.05);horn.rotation.z=side*0.4;horn.rotation.x=-0.3;enemy.add(horn);});
+const iceShell=new THREE.Mesh(new THREE.IcosahedronGeometry(0.78,1),new THREE.MeshBasicMaterial({color:0x88ddff,transparent:true,opacity:0.35,wireframe:true}));iceShell.visible=false;enemy.add(iceShell);
+const hpBarBg=new THREE.Mesh(new THREE.PlaneGeometry(1.3,0.14),new THREE.MeshBasicMaterial({color:0x111122,side:THREE.DoubleSide}));hpBarBg.position.y=1.25;enemy.add(hpBarBg);
+const hpBar=new THREE.Mesh(new THREE.PlaneGeometry(1.2,0.1),new THREE.MeshBasicMaterial({color:0x44ff77,side:THREE.DoubleSide}));hpBar.position.y=1.25;hpBar.position.z=0.01;enemy.add(hpBar);
+enemy.position.set(0,1.15,-5.5);enemy.userData.baseY=1.15;enemy.userData.hitFlash=0;enemy.userData.stagger=0;
+
+const projectiles=[];const effects=[];let activeBeam=null;
+function spawnExplosion(pos,color,scale=1){
+  const group=new THREE.Group();group.position.copy(pos);
+  const mat=new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.9});
+  const count=Math.min(14,7+Math.floor(scale*5));
+  for(let i=0;i<count;i++){
+    const p=new THREE.Mesh(new THREE.SphereGeometry(0.06*scale*(0.7+Math.random()*0.6),6,6),mat.clone());
+    const dir=new THREE.Vector3(Math.random()-0.5,Math.random()*0.6,Math.random()-0.5).normalize();
+    p.userData.vel=dir.multiplyScalar((2.5+Math.random()*3)*scale);
+    p.userData.life=0.35+Math.random()*0.3;
+    p.userData.spin=(Math.random()-0.5)*8;
+    group.add(p);
+  }
+  // expanding ring
+  const ring=new THREE.Mesh(
+    new THREE.RingGeometry(0.05,0.15*scale,16),
+    new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.7,side:THREE.DoubleSide})
+  );
+  ring.rotation.x=-Math.PI/2;
+  ring.userData.life=0.35;
+  ring.userData.isRing=true;
+  group.add(ring);
+  const core=new THREE.Mesh(new THREE.SphereGeometry(0.2*scale,8,8),new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.75}));
+  core.userData.life=0.2;core.userData.isCore=true;group.add(core);
+  scene.add(group);effects.push(group);
+  const light=new THREE.PointLight(color,2*scale,4+scale*2.5);light.position.copy(pos);scene.add(light);
+  setTimeout(()=>scene.remove(light),180);
+}
+function startLightningBeam(origin,direction,sourceId,spell){
+  if(activeBeam)stopLightningBeam();
+  const end=origin.clone().add(direction.clone().normalize().multiplyScalar(14));
+  const mkLine=(col,op)=>{
+    const pts=[];
+    for(let i=0;i<=10;i++){
+      const t=i/10;
+      const p=new THREE.Vector3().lerpVectors(origin,end,t);
+      if(i>0&&i<10){p.x+=(Math.random()-0.5)*0.15;p.y+=(Math.random()-0.5)*0.15;p.z+=(Math.random()-0.5)*0.15;}
+      pts.push(p);
+    }
+    return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:col,transparent:true,opacity:op}));
+  };
+  const line=mkLine(0x99ddff,0.95);
+  const line2=mkLine(0xffffff,0.4);
+  const line3=mkLine(0x66aaff,0.5);
+  scene.add(line);scene.add(line2);scene.add(line3);
+  const light=new THREE.PointLight(0x88ccff,2.5,8);light.position.copy(origin);scene.add(light);
+  // hand burst
+  spawnExplosion(origin.clone(),0x88ccff,0.4);
+  activeBeam={line,line2,line3,light,sourceId,origin,direction,end,spell,jitter:0};
+  state.lightningActive=true;state.lightningSpellId=spell.id;lightningTickTimer=0;playSound('lightning');
+}
+function updateLightningBeam(origin,direction){
+  if(!activeBeam)return;
+  const end=origin.clone().add(direction.clone().normalize().multiplyScalar(14));
+  const toEnemy=enemy.position.clone().sub(origin);
+  if(toEnemy.length()<14&&toEnemy.normalize().dot(direction.clone().normalize())>0.82)
+    end.copy(enemy.position).add(new THREE.Vector3(0,0.25,0));
+  const buildPts=()=>{
+    const pts=[];
+    for(let i=0;i<=10;i++){
+      const t=i/10;
+      const p=new THREE.Vector3().lerpVectors(origin,end,t);
+      if(i>0&&i<10){p.x+=(Math.random()-0.5)*0.22;p.y+=(Math.random()-0.5)*0.22;p.z+=(Math.random()-0.5)*0.22;}
+      pts.push(p);
+    }
+    return pts;
+  };
+  activeBeam.line.geometry.setFromPoints(buildPts());
+  activeBeam.line2.geometry.setFromPoints(buildPts());
+  if(activeBeam.line3)activeBeam.line3.geometry.setFromPoints(buildPts());
+  activeBeam.light.position.copy(origin);
+  activeBeam.origin=origin;activeBeam.end=end;
+}
+function stopLightningBeam(){if(!activeBeam)return;scene.remove(activeBeam.line);scene.remove(activeBeam.line2);if(activeBeam.line3)scene.remove(activeBeam.line3);scene.remove(activeBeam.light);activeBeam=null;state.lightningActive=false;state.lightningSpellId=null;}
+
+function canCast(spell){if(state.gameOver||state.spellbookOpen)return false;if((state.cooldown[spell.id]||0)>0)return false;return state.playerMp>=spell.cost;}
+function beginCharge(spell,origin,direction,sourceId){if(!canCast(spell)){if((state.cooldown[spell.id]||0)>0)showMessage('Cooldown…',0.6);else showMessage('Not enough mana!',0.8);return;}if(spell.type==='lightning'){startLightningBeam(origin,direction,sourceId,spell);state.lightningSource=sourceId;return;}state.isCharging=true;state.charge=0;state.chargeSpellId=spell.id;state.chargeOrigin=origin.clone();state.chargeDirection=direction.clone();state.chargeSource=sourceId;spellCircle.visible=true;const col=SCHOOLS[spell.school]?.color||0xff9f1c;circleRing.material.color.setHex(col);playSound('charge');}
+function updateCharge(delta,origin,direction){
+  if(!state.isCharging)return;
+  state.charge=Math.min(1,state.charge+delta/CHARGE_TIME);
+  if(origin)state.chargeOrigin.copy(origin);
+  if(direction)state.chargeDirection.copy(direction);
+  const c=state.charge;
+  const pulse=1+Math.sin(performance.now()*0.012)*0.08*c;
+  const intensity=0.5+c*0.5;
+  if(!state.isPresenting){
+    rightHand.userData.palm.material.opacity=intensity;
+    rightHand.userData.palm.scale.setScalar((1+c*0.65)*pulse);
+  }
+  circleRing.material.opacity=0.45+c*0.55;
+  circleRing2.material.opacity=0.2+c*0.5;
+  spellCircle.scale.setScalar((0.8+c*0.75)*pulse);
+  spellCircle.rotation.y+=delta*(1.8+c*4.5);
+  // secondary ring counter-rotate
+  if(circleRing2)circleRing2.rotation.z-=delta*(1+c*2);
+  document.getElementById('charge-fill').style.width=(c*100)+'%';
+}
+function releaseCharge(){if(!state.isCharging)return;const spell=getSpellDef(state.chargeSpellId);if(!spell){cancelCharge();return;}const charge=state.charge;const origin=state.chargeOrigin.clone();const direction=state.chargeDirection.clone().normalize();const cost=THREE.MathUtils.lerp(spell.cost,spell.maxCost,charge);if(state.playerMp<cost*0.55){cancelCharge();showMessage('Not enough mana!',0.8);return;}state.playerMp=Math.max(0,state.playerMp-cost);state.cooldown[spell.id]=spell.cooldown+charge*0.35;if(spell.type==='fire'||spell.type==='ice'||spell.type==='wind'){
+  // Combo: Fire + Wind sequential -> Inferno Tornado
+  const now=performance.now();
+  state.recentCasts=state.recentCasts.filter(c=>now-c.t<1600);
+  state.recentCasts.push({school:spell.school,t:now,charge});
+  let didCombo=false;
+  if(isSpellUnlocked('fireball')&&isSpellUnlocked('wind_gust')){
+    const schools=state.recentCasts.map(c=>c.school);
+    if(schools.includes('fire')&&schools.includes('wind')&&spell.school!=='ice'){
+      // spawn Inferno Tornado instead of normal projectile
+      spawnInfernoTornado(origin,direction,0.5+charge*0.5);
+      didCombo=true;
+      discoverCombo('inferno_tornado');
+      state.recentCasts=[];
+      state.playerMp=Math.max(0,state.playerMp-8); // small extra cost
+    }
+  }
+  if(!didCombo){
+    const size=0.12+charge*0.18+(spell.tier-1)*0.04;
+    const speed=spell.speed+charge*4;
+    const dmg=spell.damage+Math.floor(charge*16)+(spell.tier-1)*4;
+    const col=spell.school==='fire'?0xff5a00:spell.school==='ice'?0x66ddff:0xa8e6cf;
+    const ball=new THREE.Mesh(new THREE.SphereGeometry(size,10,10),new THREE.MeshBasicMaterial({color:col}));
+    const glow=new THREE.Mesh(new THREE.SphereGeometry(size*1.85,8,8),new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.32+charge*0.25}));
+    ball.add(glow);
+    // trailing sparks (lightweight)
+    for(let t=0;t<3;t++){
+      const trail=new THREE.Mesh(new THREE.SphereGeometry(size*0.35,5,5),new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.5}));
+      trail.position.z=0.12+t*0.1;
+      trail.userData.isTrail=true;
+      ball.add(trail);
+    }
+    ball.position.copy(origin);
+    ball.userData.vel=direction.multiplyScalar(speed);
+    ball.userData.life=2.6;
+    ball.userData.spell=spell;
+    ball.userData.charge=charge;
+    ball.userData.damage=dmg;
+    ball.userData.spinSpeed=6+charge*4;
+    // muzzle flash at hand
+    spawnExplosion(origin.clone(),col,0.35+charge*0.25);
+    scene.add(ball);projectiles.push(ball);
+    playSound(spell.type==='fire'?'fire':spell.type==='ice'?'ice':'charge');
+  }
+}cancelCharge();updateHud();}
+function cancelCharge(){state.isCharging=false;state.charge=0;state.chargeSpellId=null;spellCircle.visible=false;spellCircle.scale.setScalar(1);if(!state.isPresenting){rightHand.userData.palm.material.opacity=0.55;rightHand.userData.palm.scale.setScalar(1);}document.getElementById('charge-fill').style.width='0%';}
+
+
+function discoverCombo(id){
+  if(!progress.discoveredCombos)progress.discoveredCombos=[];
+  if(progress.discoveredCombos.includes(id))return;
+  progress.discoveredCombos.push(id);saveProgress();
+  if(typeof refreshMissionStatuses==='function'){refreshMissionStatuses();saveProgress();}
+  const def=COMBO_DEFS.find(c=>c.id===id);
+  showMessage('Combination discovered!\n'+(def?def.name:id),2.8);
+  playSound('unlock');
+}
+function spawnInfernoTornado(origin,direction,power){
+  const group=new THREE.Group();
+  group.position.copy(origin);
+  // swirling rings
+  for(let i=0;i<3;i++){
+    const ring=new THREE.Mesh(
+      new THREE.TorusGeometry(0.25+i*0.12,0.04,6,16),
+      new THREE.MeshBasicMaterial({color:i%2?0xff5a00:0xffaa33,transparent:true,opacity:0.7})
+    );
+    ring.rotation.x=Math.PI/2;
+    ring.userData.spin=2.5+i;
+    group.add(ring);
+  }
+  // core
+  const core=new THREE.Mesh(new THREE.SphereGeometry(0.18,8,8),new THREE.MeshBasicMaterial({color:0xff3300,transparent:true,opacity:0.8}));
+  group.add(core);
+  const light=new THREE.PointLight(0xff6600,1.5,5);
+  group.add(light);
+  group.userData.vel=direction.clone().normalize().multiplyScalar(7);
+  group.userData.life=3.2;
+  group.userData.tick=0;
+  group.userData.power=power;
+  group.userData.isTornado=true;
+  scene.add(group);
+  state.activeTornadoes.push(group);
+  playSound('fire');
+  showMessage('Inferno Tornado!',1.2);
+}
+function spawnShatterEffect(pos){
+  const group=new THREE.Group();group.position.copy(pos);
+  for(let i=0;i<10;i++){
+    const shard=new THREE.Mesh(new THREE.TetrahedronGeometry(0.08,0),new THREE.MeshBasicMaterial({color:0xaaddff,transparent:true,opacity:0.9}));
+    const dir=new THREE.Vector3(Math.random()-0.5,Math.random()-0.2,Math.random()-0.5).normalize();
+    shard.userData.vel=dir.multiplyScalar(3+Math.random()*3);
+    shard.userData.life=0.5+Math.random()*0.3;
+    group.add(shard);
+  }
+  // electric flash
+  const flash=new THREE.Mesh(new THREE.SphereGeometry(0.4,8,8),new THREE.MeshBasicMaterial({color:0x88ccff,transparent:true,opacity:0.6}));
+  flash.userData.life=0.2;flash.userData.isCore=true;group.add(flash);
+  scene.add(group);effects.push(group);
+  const light=new THREE.PointLight(0x88eeff,3,6);light.position.copy(pos);scene.add(light);setTimeout(()=>scene.remove(light),200);
+  playSound('lightning');
+}
+/* old single-target damageEnemy removed — use damageEnemyEntity */
+function resetEnemy(){/* legacy no-op — arena manages enemies */}
+function damagePlayer(amount){if(state.gameOver)return;state.playerHp=Math.max(0,state.playerHp-amount);updateHud();playSound('hurt');if(state.playerHp<=0){state.gameOver=true;state.inCombat=false;stopLightningBeam();cancelCharge();showMessage('You were defeated…\nTap Restart',99);document.getElementById('restart-btn').style.display='block';}}
+
+let audioCtx=null;
+function initAudio(){if(audioCtx)return;audioCtx=new(window.AudioContext||window.webkitAudioContext)();}
+function playSound(type){if(!state.audioReady||!audioCtx)return;const now=audioCtx.currentTime;const osc=audioCtx.createOscillator();const gain=audioCtx.createGain();osc.connect(gain);gain.connect(audioCtx.destination);const tones={charge:['sine',180,320,0.06,0.35],fire:['sawtooth',140,60,0.11,0.22],ice:['sine',480,720,0.09,0.18],lightning:['sawtooth',700,180,0.1,0.18],hit:['triangle',150,55,0.13,0.12],hurt:['square',110,40,0.08,0.2],freeze:['sine',520,900,0.09,0.22],levelup:['sine',400,800,0.12,0.35],unlock:['triangle',300,600,0.1,0.25]};const t=tones[type]||tones.hit;osc.type=t[0];osc.frequency.setValueAtTime(t[1],now);osc.frequency.exponentialRampToValueAtTime(Math.max(40,t[2]),now+t[4]*0.9);gain.gain.setValueAtTime(t[3],now);gain.gain.exponentialRampToValueAtTime(0.001,now+t[4]);osc.start(now);osc.stop(now+t[4]+0.02);}
+
+
+// ========== ARENA: WAVES + GRIND ==========
+const ENEMY_TYPES = {
+  dummy: { name:'Training Dummy', hp:70, speed:0, damage:10, color:0x6b2d8b, xp:22, scale:1 },
+  grub:  { name:'Shadow Grub', hp:45, speed:1.6, damage:8, color:0x3d1a4a, xp:16, scale:0.75 },
+  spitter:{ name:'Hex Spitter', hp:55, speed:0.9, damage:11, color:0x2a4a6b, xp:20, scale:0.9 },
+  brute: { name:'Ruin Brute', hp:120, speed:0.7, damage:16, color:0x5a2a1a, xp:40, scale:1.35 },
+};
+
+// ========== ARENAS / MAPS ==========
+const ARENAS = [
+  {
+    id: 'forest', name: 'Emerald Clearing',
+    bg: 0x07071a, fog: 0x07071a, ground: 0x1a2e1a, ambient: 0x334466,
+    fill: 0xff8844, rim: 0x4488ff, accent: 0x336644,
+    desc: 'Moonlit forest training grounds'
+  },
+  {
+    id: 'ruins', name: 'Fallen Sanctum',
+    bg: 0x120a18, fog: 0x120a18, ground: 0x2a2430, ambient: 0x4a3560,
+    fill: 0xaa66ff, rim: 0x6644aa, accent: 0x5a4060,
+    desc: 'Ancient broken temple courtyard'
+  },
+  {
+    id: 'frost', name: 'Glacial Hollow',
+    bg: 0x0a1218, fog: 0x0a1218, ground: 0x1a2a35, ambient: 0x406080,
+    fill: 0x66ccff, rim: 0x88aadd, accent: 0x3a5a70,
+    desc: 'Frozen cavern of biting winds'
+  },
+  {
+    id: 'ember', name: 'Ember Wastes',
+    bg: 0x1a0a08, fog: 0x1a0a08, ground: 0x2a1510, ambient: 0x603020,
+    fill: 0xff6622, rim: 0xffaa44, accent: 0x5a3020,
+    desc: 'Scorched ground and glowing cracks'
+  }
+];
+
+let currentArenaIndex = 0;
+let arenaProps = []; // meshes to remove on switch
+
+function clearArenaProps(){
+  arenaProps.forEach(m => scene.remove(m));
+  arenaProps = [];
+}
+
+function addArenaProp(mesh){
+  scene.add(mesh);
+  arenaProps.push(mesh);
+  return mesh;
+}
+
+function buildArena(index){
+  currentArenaIndex = index % ARENAS.length;
+  if(typeof trackMissionArena==='function') trackMissionArena(currentArenaIndex);
+  const A = ARENAS[currentArenaIndex];
+  clearArenaProps();
+
+  scene.background = new THREE.Color(A.bg);
+  scene.fog = new THREE.FogExp2(A.fog, 0.028);
+  // retint main ground if present
+  if(typeof ground !== 'undefined') ground.material.color.setHex(A.ground);
+  if(typeof ring !== 'undefined') ring.material.color.setHex(A.accent);
+  if(typeof fill !== 'undefined') fill.color.setHex(A.fill);
+  if(typeof rim !== 'undefined') rim.color.setHex(A.rim);
+
+  // Theme props
+  if(A.id === 'forest'){
+    // extra glowing mushrooms
+    for(let i=0;i<6;i++){
+      const stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04,0.06,0.25,6),
+        new THREE.MeshStandardMaterial({ color: 0xddddcc })
+      );
+      const cap = new THREE.Mesh(
+        new THREE.SphereGeometry(0.14, 8, 6),
+        new THREE.MeshStandardMaterial({ color: 0x44ffaa, emissive: 0x22aa66, emissiveIntensity: 0.5 })
+      );
+      cap.position.y = 0.2; cap.scale.y = 0.5;
+      const g = new THREE.Group(); g.add(stem); g.add(cap);
+      const ang = (i/6)*Math.PI*2;
+      g.position.set(Math.cos(ang)*4.5, 0.12, Math.sin(ang)*4.5 - 1);
+      addArenaProp(g);
+    }
+  } else if(A.id === 'ruins'){
+    for(let i=0;i<5;i++){
+      const h = 1.5 + Math.random()*1.5;
+      const p = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, h, 0.5),
+        new THREE.MeshStandardMaterial({ color: 0x3a3048, roughness: 0.9 })
+      );
+      p.position.set((Math.random()-0.5)*10, h/2, -6 - Math.random()*4);
+      addArenaProp(p);
+      const rune = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.25,0.25),
+        new THREE.MeshBasicMaterial({ color: 0xaa66ff, transparent: true, opacity: 0.7, side: THREE.DoubleSide })
+      );
+      rune.position.copy(p.position); rune.position.y = h*0.6; rune.position.z += 0.27;
+      addArenaProp(rune);
+    }
+  } else if(A.id === 'frost'){
+    for(let i=0;i<8;i++){
+      const spike = new THREE.Mesh(
+        new THREE.ConeGeometry(0.15 + Math.random()*0.1, 0.8 + Math.random()*1.2, 5),
+        new THREE.MeshStandardMaterial({ color: 0xaaddff, transparent: true, opacity: 0.7, roughness: 0.2 })
+      );
+      const ang = Math.random()*Math.PI*2;
+      const r = 3 + Math.random()*6;
+      spike.position.set(Math.cos(ang)*r, spike.geometry.parameters.height/2, Math.sin(ang)*r - 1);
+      addArenaProp(spike);
+    }
+    // ice floor patches
+    for(let i=0;i<4;i++){
+      const patch = new THREE.Mesh(
+        new THREE.CircleGeometry(0.8 + Math.random()*0.5, 12),
+        new THREE.MeshBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.25, side: THREE.DoubleSide })
+      );
+      patch.rotation.x = -Math.PI/2; patch.position.y = 0.03;
+      patch.position.set((Math.random()-0.5)*8, 0.03, (Math.random()-0.5)*8 - 2);
+      addArenaProp(patch);
+    }
+  } else if(A.id === 'ember'){
+    for(let i=0;i<7;i++){
+      const rock = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.3 + Math.random()*0.25, 0),
+        new THREE.MeshStandardMaterial({ color: 0x3a2010, emissive: 0xff4400, emissiveIntensity: 0.25 + Math.random()*0.3 })
+      );
+      rock.position.set((Math.random()-0.5)*9, 0.25, (Math.random()-0.5)*8 - 1);
+      addArenaProp(rock);
+    }
+    // glowing cracks (lines on ground)
+    for(let i=0;i<5;i++){
+      const crack = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.08, 1.5 + Math.random()),
+        new THREE.MeshBasicMaterial({ color: 0xff6622, transparent: true, opacity: 0.6, side: THREE.DoubleSide })
+      );
+      crack.rotation.x = -Math.PI/2;
+      crack.rotation.z = Math.random()*Math.PI;
+      crack.position.set((Math.random()-0.5)*7, 0.04, (Math.random()-0.5)*7 - 2);
+      addArenaProp(crack);
+    }
+  }
+
+  showMessage(A.name + '\n' + A.desc, 2.5);
+  updateHud();
+}
+
+function nextArena(){
+  buildArena(currentArenaIndex + 1);
+}
+
+
+function makeEnemyEntity(typeId, x, z){
+  const def = ENEMY_TYPES[typeId] || ENEMY_TYPES.dummy;
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({
+    color: def.color, emissive: def.color, emissiveIntensity: 0.35, roughness: 0.4, flatShading: true
+  });
+  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55*def.scale, 1), mat);
+  group.add(body);
+  const eye = new THREE.Mesh(
+    new THREE.SphereGeometry(0.14*def.scale, 10, 10),
+    new THREE.MeshBasicMaterial({ color: 0xffee66 })
+  );
+  eye.position.set(0, 0.12*def.scale, 0.4*def.scale);
+  group.add(eye);
+  // hp bar
+  const hpBg = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.0*def.scale, 0.1),
+    new THREE.MeshBasicMaterial({ color: 0x111122, side: THREE.DoubleSide })
+  );
+  hpBg.position.y = 1.0*def.scale;
+  group.add(hpBg);
+  const hpFill = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.92*def.scale, 0.07),
+    new THREE.MeshBasicMaterial({ color: 0x44ff77, side: THREE.DoubleSide })
+  );
+  hpFill.position.y = 1.0*def.scale;
+  hpFill.position.z = 0.01;
+  group.add(hpFill);
+  group.position.set(x, 0.9*def.scale, z);
+  group.userData = {
+    typeId, def, hp: def.hp, maxHp: def.hp, mat, body, hpFill, hpBg,
+    hitFlash: 0, stagger: 0, baseY: 0.9*def.scale, attackCd: 1.5+Math.random(),
+    alive: true, scale: def.scale
+  };
+  scene.add(group);
+  return group;
+}
+
+function clearAllEnemies(){
+  state.enemies.forEach(e => { scene.remove(e); });
+  state.enemies = [];
+  // hide legacy single enemy if present
+  if(typeof enemy !== 'undefined') enemy.visible = false;
+}
+
+function spawnWaveEnemies(waveNum){
+  clearAllEnemies();
+  const layouts = [
+    [['dummy', 0, -5]],
+    [['grub', -2, -5], ['grub', 2, -5]],
+    [['spitter', 0, -6], ['grub', -3, -4], ['grub', 3, -4]],
+    [['brute', 0, -5.5], ['spitter', -3.5, -4], ['spitter', 3.5, -4]],
+    [['brute', -2, -6], ['brute', 2, -6], ['spitter', 0, -4], ['grub', -4, -5], ['grub', 4, -5]],
+  ];
+  const layout = layouts[Math.min(waveNum-1, layouts.length-1)];
+  layout.forEach(([type, x, z]) => {
+    state.enemies.push(makeEnemyEntity(type, x, z));
+  });
+}
+
+function spawnGrindEnemy(){
+  // keep grind from overcrowding
+  const alive = state.enemies.filter(e => e.userData.alive).length;
+  if(alive >= 4) return;
+  const types = ['grub', 'grub', 'spitter', 'dummy'];
+  const type = types[Math.floor(Math.random()*types.length)];
+  const ang = Math.random()*Math.PI*2;
+  const r = 5 + Math.random()*3;
+  state.enemies.push(makeEnemyEntity(type, Math.cos(ang)*r, Math.sin(ang)*r - 2));
+}
+
+function startWave(n){
+  state.wave = n;
+  state.mode = 'wave';
+  state.grindKills = 0;
+  spawnWaveEnemies(n);
+  showMessage('〔 WAVE '+n+' / '+state.maxWaves+' 〕', 2.2);
+  playSound('levelup');
+  updateHud();
+}
+
+function startGrind(){
+  state.mode = 'grind';
+  clearAllEnemies();
+  showMessage('Grind Phase\nDefeat foes to gain XP\nPress N when ready for next wave', 3.5);
+  // spawn a few to start
+  for(let i=0;i<2;i++) spawnGrindEnemy();
+  updateHud();
+}
+
+function onArenaEnemyKilled(ent){
+  const xp = (ent.userData.def.xp || 18) + progress.level * 2;
+  addXP(xp);
+  if(typeof trackMissionKill==='function') trackMissionKill(ent.userData.typeId);
+  ent.userData.alive = false;
+  ent.visible = false;
+  if(state.mode === 'grind'){
+    state.grindKills++;
+    // respawn delay
+    setTimeout(() => { if(state.mode === 'grind' && !state.gameOver) spawnGrindEnemy(); }, 900);
+  } else if(state.mode === 'wave'){
+    const remaining = state.enemies.filter(e => e.userData.alive).length;
+    if(remaining === 0){
+      if(state.wave >= state.maxWaves){
+        state.mode = 'won';
+        if(typeof trackMissionWave==='function') trackMissionWave(state.wave);
+        showMessage('〔 SYSTEM 〕\nAll arenas cleared\nLink strength rising', 5);
+        playSound('unlock');
+      } else {
+        state.mode = 'grind';
+        if(typeof trackMissionWave==='function') trackMissionWave(state.wave);
+        if(typeof nextArena === 'function') nextArena();
+        showMessage('Wave Cleared!\nNew arena unlocked for grinding\nPress N for Wave '+(state.wave+1), 3.5);
+        setTimeout(() => { if(state.mode === 'grind') { spawnGrindEnemy(); spawnGrindEnemy(); } }, 1200);
+      }
+    }
+  }
+  updateHud();
+}
+
+function damageEnemyEntity(ent, amount, isIce=false, freezeTime=2400){
+  if(!ent || !ent.userData.alive) return;
+  ent.userData.hp = Math.max(0, ent.userData.hp - amount);
+  if(typeof spawnDamageNumber==='function') spawnDamageNumber(ent.position.clone().add(new THREE.Vector3(0,1.1,0)), amount, amount>=25);
+  ent.userData.hitFlash = 0.4;
+  ent.userData.stagger = 0.4;
+  ent.userData.hitDir = camera.getWorldPosition(new THREE.Vector3()).sub(ent.position).normalize();
+  playSound('hit');
+  // hp bar
+  const ratio = Math.max(0.01, ent.userData.hp / ent.userData.maxHp);
+  ent.userData.hpFill.scale.x = ratio;
+  ent.userData.hpFill.position.x = -0.46*ent.userData.scale*(1-ratio);
+  if(isIce){
+    ent.userData.frozenUntil = performance.now() + freezeTime;
+    ent.userData.mat.emissive.setHex(0x66aacc);
+    ent.userData.mat.emissiveIntensity = 0.7;
+    playSound('freeze');
+  }
+  if(ent.userData.hp <= 0){
+    ent.userData.mat.color.setHex(0x333344);
+    ent.userData.mat.emissiveIntensity = 0.1;
+    onArenaEnemyKilled(ent);
+  }
+}
+
+// Redirect legacy damageEnemy to nearest/first alive for combos compatibility
+function damageEnemy(amount, isIce=false, freezeTime=2400){
+  // prefer closest alive enemy to camera
+  let best=null, bestD=999;
+  const camPos = camera.getWorldPosition(new THREE.Vector3());
+  state.enemies.forEach(e => {
+    if(!e.userData.alive) return;
+    const d = e.position.distanceTo(camPos);
+    if(d < bestD){ bestD=d; best=e; }
+  });
+  if(best) damageEnemyEntity(best, amount, isIce, freezeTime);
+  else if(typeof enemy !== 'undefined' && enemy.visible && state.enemyHp > 0){
+    // fallback legacy
+    state.enemyHp = Math.max(0, state.enemyHp - amount);
+  }
+}
+
+
+// ========== MISSIONS ==========
+const MISSION_DEFS = [
+  { id:'slay_5', name:'Pest Control', desc:'Defeat 5 enemies in the clearing.', type:'kills', target:5, reward:{xp:40, sp:0}, unlockWave:0 },
+  { id:'slay_15', name:'Clearing Patrol', desc:'Defeat 15 enemies (grind or waves).', type:'kills', target:15, reward:{xp:90, sp:1}, unlockWave:0 },
+  { id:'wave_1', name:'First Trial', desc:'Clear Wave 1.', type:'wave', target:1, reward:{xp:50, sp:0}, unlockWave:0 },
+  { id:'wave_3', name:'Rising Threat', desc:'Clear Wave 3.', type:'wave', target:3, reward:{xp:120, sp:1}, unlockWave:0 },
+  { id:'wave_5', name:'Champion of the Clearing', desc:'Clear Wave 5.', type:'wave', target:5, reward:{xp:200, sp:2}, unlockWave:0 },
+  { id:'grubs_8', name:'Grub Hunt', desc:'Defeat 8 Shadow Grubs.', type:'killType', target:8, typeId:'grub', reward:{xp:70, sp:0}, unlockWave:0 },
+  { id:'brute_2', name:'Brute Breaker', desc:'Defeat 2 Ruin Brutes.', type:'killType', target:2, typeId:'brute', reward:{xp:100, sp:1}, unlockWave:0 },
+  { id:'combo_fire', name:'Inferno Initiate', desc:'Discover the Inferno Tornado combination.', type:'combo', target:'inferno_tornado', reward:{xp:60, sp:1}, unlockWave:0 },
+  { id:'combo_shatter', name:'Shatter Scholar', desc:'Discover Shatterstorm.', type:'combo', target:'shatterstorm', reward:{xp:60, sp:1}, unlockWave:0 },
+  { id:'arena_tour', name:'World Walker', desc:'Visit all 4 arenas (use M while grinding).', type:'arenas', target:4, reward:{xp:80, sp:1}, unlockWave:0 },
+];
+
+function ensureMissionProgress(){
+  if(!progress.missions) progress.missions = {};
+  if(!progress.missionStats) progress.missionStats = { kills:0, killsByType:{}, wavesCleared:0, arenasVisited:[] };
+  MISSION_DEFS.forEach(m => {
+    if(!progress.missions[m.id]) progress.missions[m.id] = { status:'available', progress:0 }; // available | active | claimable | claimed
+  });
+}
+
+function getMissionProgressValue(def){
+  const st = progress.missionStats || {};
+  if(def.type==='kills') return st.kills || 0;
+  if(def.type==='wave') return st.wavesCleared || 0;
+  if(def.type==='killType') return (st.killsByType && st.killsByType[def.typeId]) || 0;
+  if(def.type==='combo') return (progress.discoveredCombos||[]).includes(def.target) ? 1 : 0;
+  if(def.type==='arenas') return (st.arenasVisited||[]).length;
+  return 0;
+}
+
+function missionTargetNum(def){
+  if(def.type==='combo') return 1;
+  return def.target;
+}
+
+function refreshMissionStatuses(){
+  ensureMissionProgress();
+  MISSION_DEFS.forEach(def => {
+    const m = progress.missions[def.id];
+    if(m.status === 'claimed') return;
+    const val = getMissionProgressValue(def);
+    m.progress = val;
+    if(m.status === 'active' && val >= missionTargetNum(def)){
+      m.status = 'claimable';
+    }
+  });
+}
+
+function acceptMission(id){
+  ensureMissionProgress();
+  const m = progress.missions[id];
+  if(!m || m.status !== 'available') return;
+  // limit active missions
+  const activeCount = Object.values(progress.missions).filter(x => x.status==='active' || x.status==='claimable').length;
+  if(activeCount >= 3){ showMessage('Max 3 active missions', 1.5); return; }
+  m.status = 'active';
+  m.progress = getMissionProgressValue(MISSION_DEFS.find(d=>d.id===id));
+  if(m.progress >= missionTargetNum(MISSION_DEFS.find(d=>d.id===id))) m.status = 'claimable';
+  saveProgress();
+  renderMissions();
+  showMessage('〔 QUEST ACCEPTED 〕', 1.2);
+  playSound('unlock');
+}
+
+function claimMission(id){
+  ensureMissionProgress();
+  const def = MISSION_DEFS.find(d=>d.id===id);
+  const m = progress.missions[id];
+  if(!def || !m || m.status !== 'claimable') return;
+  m.status = 'claimed';
+  if(def.reward.xp) addXP(def.reward.xp);
+  if(def.reward.sp){ progress.skillPoints += def.reward.sp; saveProgress(); }
+  saveProgress();
+  renderMissions();
+  updateHud();
+  showMessage('〔 REWARD 〕\n+'+(def.reward.xp||0)+' XP'+(def.reward.sp?' · +'+def.reward.sp+' SP':''), 2.2);
+  playSound('levelup');
+}
+
+function trackMissionKill(typeId){
+  ensureMissionProgress();
+  progress.missionStats.kills = (progress.missionStats.kills||0) + 1;
+  if(!progress.missionStats.killsByType) progress.missionStats.killsByType = {};
+  progress.missionStats.killsByType[typeId] = (progress.missionStats.killsByType[typeId]||0) + 1;
+  refreshMissionStatuses();
+  saveProgress();
+}
+
+function trackMissionWave(waveNum){
+  ensureMissionProgress();
+  progress.missionStats.wavesCleared = Math.max(progress.missionStats.wavesCleared||0, waveNum);
+  refreshMissionStatuses();
+  saveProgress();
+}
+
+function trackMissionArena(idx){
+  ensureMissionProgress();
+  if(!progress.missionStats.arenasVisited) progress.missionStats.arenasVisited = [];
+  if(!progress.missionStats.arenasVisited.includes(idx)){
+    progress.missionStats.arenasVisited.push(idx);
+    refreshMissionStatuses();
+    saveProgress();
+  }
+}
+
+function openMissions(){
+  if(state.isPresenting){ showMessage('Exit VR to open Missions', 1.5); return; }
+  if(state.isCharging || state.lightningActive){ showMessage('Finish casting first', 1.2); return; }
+  state.spellbookOpen = true; // block combat input same as spellbook
+  document.getElementById('missions').classList.add('open');
+  renderMissions();
+}
+function closeMissions(){
+  document.getElementById('missions').classList.remove('open');
+  if(!document.getElementById('spellbook').classList.contains('open')) state.spellbookOpen = false;
+}
+function renderMissions(){
+  ensureMissionProgress();
+  refreshMissionStatuses();
+  const stats = document.getElementById('missions-stats');
+  if(stats){
+    const st = progress.missionStats;
+    stats.innerHTML = 'Total kills: <b>'+(st.kills||0)+'</b> · Waves cleared: <b>'+(st.wavesCleared||0)+'</b> · Skill points: <b>'+progress.skillPoints+'</b>';
+  }
+  const list = document.getElementById('mission-list');
+  if(!list) return;
+  list.innerHTML = '';
+  MISSION_DEFS.forEach(def => {
+    const m = progress.missions[def.id];
+    const card = document.createElement('div');
+    card.className = 'mission-card' + (m.status==='active'||m.status==='claimable'?' active':'') + (m.status==='claimed'?' done':'');
+    const need = missionTargetNum(def);
+    const have = Math.min(m.progress, need);
+    let progText = '';
+    if(def.type==='combo') progText = m.progress >= 1 ? 'Discovered' : 'Not yet discovered';
+    else progText = 'Progress: '+have+' / '+need;
+    let btn = '';
+    if(m.status==='available') btn = '<button data-act="accept" data-id="'+def.id+'">Accept Quest</button>';
+    else if(m.status==='active') btn = '<button disabled style="opacity:0.5">In progress…</button>';
+    else if(m.status==='claimable') btn = '<button data-act="claim" data-id="'+def.id+'">Claim Reward</button>';
+    else btn = '<button disabled style="opacity:0.5">Completed</button>';
+    const rew = '+'+(def.reward.xp||0)+' XP'+(def.reward.sp?' · +'+def.reward.sp+' Skill Point':'');
+    card.innerHTML = '<h3>'+def.name+'</h3><div class="m-desc">'+def.desc+'</div><div class="m-prog">'+progText+'</div><div class="m-rew">Reward: '+rew+'</div>'+btn;
+    list.appendChild(card);
+  });
+  list.querySelectorAll('button[data-act]').forEach(b => {
+    b.onclick = () => {
+      if(b.dataset.act==='accept') acceptMission(b.dataset.id);
+      if(b.dataset.act==='claim') claimMission(b.dataset.id);
+    };
+  });
+}
+
+
+function spawnDamageNumber(worldPos, amount, isCrit){
+  try {
+    const v = worldPos.clone().project(camera);
+    const x = (v.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-v.y * 0.5 + 0.5) * window.innerHeight;
+    if(v.z > 1) return;
+    const el = document.createElement('div');
+    el.className = 'dmg-float' + (isCrit ? ' crit' : '');
+    el.textContent = (isCrit ? '!' : '') + Math.floor(amount);
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 900);
+  } catch(e) {}
+}
+
+function updateHud(){document.getElementById('player-level').textContent=progress.level;document.getElementById('hp-fill').style.width=(state.playerHp/state.playerMaxHp*100)+'%';document.getElementById('mp-fill').style.width=(state.playerMp/state.playerMaxMp*100)+'%';document.getElementById('enemy-fill').style.width=(state.enemyHp/state.enemyMaxHp*100)+'%';const xpNow=progress.xp-xpForLevel(progress.level);const xpNext=xpForLevel(progress.level+1)-xpForLevel(progress.level);document.getElementById('xp-fill').style.width=Math.min(100,(xpNow/Math.max(1,xpNext))*100)+'%';const s=currentSpell();document.getElementById('spell-name').textContent=s.name;document.getElementById('mana-cost').textContent=s.chargeable?`Cost: ${s.cost}–${s.maxCost} MP`:`Cost: ${s.cost} MP/s`;{
+  const alive=state.enemies.filter(e=>e.userData.alive).length;
+  const el=document.getElementById('enemy-status');
+  const an = (typeof ARENAS!=='undefined'&&ARENAS[currentArenaIndex])?ARENAS[currentArenaIndex].name:'Arena';
+  if(state.mode==='grind') el.textContent=an+' · Grind · Kills '+state.grindKills;
+  else if(state.mode==='wave') el.textContent=an+' · Wave '+state.wave+'/'+state.maxWaves+' · Left '+alive;
+  else if(state.mode==='won') el.textContent='Victory!';
+  else el.textContent=an+(alive?' · '+alive+' foes':'');
+  // aggregate hp bar: average or first alive
+  const first=state.enemies.find(e=>e.userData.alive);
+  if(first) document.getElementById('enemy-fill').style.width=(first.userData.hp/first.userData.maxHp*100)+'%';
+  else document.getElementById('enemy-fill').style.width='0%';
+}document.querySelectorAll('#spell-bar .spell-btn').forEach((btn,i)=>{const id=progress.loadout[i];if(!id)return;const sp=getSpellDef(id);const onCd=(state.cooldown[id]||0)>0;btn.classList.toggle('disabled',(state.playerMp<(sp?.cost||99)||onCd)&&!state.gameOver);btn.classList.toggle('selected',i===state.selectedLoadoutIndex);});}
+function showMessage(text,duration=1.5){const el=document.getElementById('center-msg');el.innerHTML=text.replace(/\n/g,'<br>');el.classList.add('show');if(duration<50)setTimeout(()=>el.classList.remove('show'),duration*1000);}
+function rebuildSpellBar(){const bar=document.getElementById('spell-bar');bar.innerHTML='';for(let i=0;i<MAX_LOADOUT;i++){const id=progress.loadout[i];const btn=document.createElement('button');btn.className='spell-btn'+(id?'':' empty')+(i===state.selectedLoadoutIndex?' selected':'');if(id){const sp=getSpellDef(id);btn.innerHTML=`<span class="icon">${sp?.icon||'?'}</span>${sp?.name?.split(' ')[0]||id}`;btn.dataset.idx=i;btn.addEventListener('click',e=>{e.stopPropagation();selectLoadout(i);});btn.addEventListener('touchend',e=>{e.preventDefault();e.stopPropagation();selectLoadout(i);},{passive:false});}else btn.textContent='—';bar.appendChild(btn);}updateHud();}
+function selectLoadout(idx){if(idx<0||idx>=progress.loadout.length)return;if(state.isCharging||state.lightningActive)return;state.selectedLoadoutIndex=idx;rebuildSpellBar();}
+function openSpellbook(){if(state.isPresenting){showMessage('Exit VR to open Spellbook',1.5);return;}if(state.enemyHp>0&&(state.isCharging||state.lightningActive)){showMessage('Finish casting first',1.2);return;}state.spellbookOpen=true;document.getElementById('spellbook').classList.add('open');renderSpellbook();}
+function closeSpellbook(){state.spellbookOpen=false;document.getElementById('spellbook').classList.remove('open');}
+function renderSpellbook(){const stats=document.getElementById('sb-stats');const xpNow=progress.xp-xpForLevel(progress.level);const xpNext=xpForLevel(progress.level+1)-xpForLevel(progress.level);stats.innerHTML=`Level <b>${progress.level}</b> &nbsp;·&nbsp; XP ${xpNow}/${xpNext} &nbsp;·&nbsp; Skill Points: <b>${progress.skillPoints}</b>`;const loadoutEl=document.getElementById('loadout-display');loadoutEl.innerHTML='';for(let i=0;i<MAX_LOADOUT;i++){const id=progress.loadout[i];const slot=document.createElement('div');slot.className='loadout-slot'+(id?' filled':'');if(id){const sp=getSpellDef(id);slot.innerHTML=`<div style="font-size:18px">${sp?.icon||'?'}</div><div>${sp?.name?.split(' ')[0]||''}</div>`;slot.title='Click to unequip';slot.onclick=()=>unequipSpell(id);}else slot.textContent='Empty';loadoutEl.appendChild(slot);}const treeEl=document.getElementById('skill-tree');treeEl.innerHTML='';SKILL_DEFS.forEach(sk=>{const unlocked=progress.unlockedSkills.includes(sk.id);const canBuy=!unlocked&&progress.skillPoints>=sk.cost&&sk.requires.every(r=>progress.unlockedSkills.includes(r));const node=document.createElement('div');node.className='skill-node '+(unlocked?'unlocked':canBuy?'available':'locked');node.textContent=`${sk.name} (${sk.cost} pt)`;node.title=sk.desc;if(canBuy)node.onclick=()=>tryUnlockSkill(sk.id);treeEl.appendChild(node);});const comboEl=document.getElementById('combo-list');
+if(comboEl){comboEl.innerHTML='';
+(typeof COMBO_DEFS!=='undefined'?COMBO_DEFS:[]).forEach(c=>{
+  const known=progress.discoveredCombos&&progress.discoveredCombos.includes(c.id);
+  const canTry=c.schools.every(sch=>SPELL_DEFS.some(s=>s.school===sch&&isSpellUnlocked(s.id)));
+  const card=document.createElement('div');
+  card.className='combo-card'+(known?' known':'');
+  card.innerHTML='<div class="cc-name">'+(known?c.name:'??? Combination')+'</div><div class="cc-req">Requires: '+c.schools.join(' + ')+'</div><div class="cc-how">'+(known?c.how:(canTry?'Experiment to discover…':'Unlock required schools first'))+'</div>';
+  comboEl.appendChild(card);
+});}
+const listEl=document.getElementById('spell-list');listEl.innerHTML='';SPELL_DEFS.forEach(sp=>{const unlocked=isSpellUnlocked(sp.id);const equipped=progress.loadout.includes(sp.id);const card=document.createElement('div');card.className='spell-card'+(unlocked?'':' locked')+(equipped?' equipped':'');let action='';if(!unlocked)action=sp.unlock.type==='skill'?'Locked – requires skill':'Locked';else if(equipped)action='Equipped – tap to unequip';else action='Tap to equip';card.innerHTML=`<div class="sc-name">${sp.icon} ${sp.name}</div><div class="sc-meta">${SCHOOLS[sp.school]?.name||sp.school} · Tier ${sp.tier} · ${sp.cost} MP</div><div class="sc-desc">${sp.desc}</div><div class="sc-action">${action}</div>`;if(unlocked)card.onclick=()=>{if(equipped)unequipSpell(sp.id);else equipSpell(sp.id);};listEl.appendChild(card);});}
+document.getElementById('spellbook-btn').addEventListener('click',openSpellbook);
+    if(document.getElementById('mission-btn')) document.getElementById('mission-btn').addEventListener('click',openMissions);
+    if(document.getElementById('missions-close')) document.getElementById('missions-close').addEventListener('click',closeMissions);
+document.getElementById('sb-close').addEventListener('click',closeSpellbook);
+document.getElementById('restart-btn').addEventListener('click',()=>{
+      state.playerHp=state.playerMaxHp;state.playerMp=state.playerMaxMp;state.gameOver=false;state.frozenUntil=0;state.cooldown={};
+      stopLightningBeam();cancelCharge();
+      document.getElementById('restart-btn').style.display='none';
+      document.getElementById('center-msg').classList.remove('show');
+      state.wave=0; startGrind();
+      updateHud(); showMessage('Back to grinding!',1.2);
+    });
+
+const keys={};let desktopHolding=false;
+window.addEventListener('keydown',e=>{keys[e.code]=true;if(e.code==='KeyB'){if(document.getElementById('missions').classList.contains('open'))closeMissions();if(state.spellbookOpen)closeSpellbook();else openSpellbook();}
+      if(e.code==='KeyJ'){if(document.getElementById('missions').classList.contains('open'))closeMissions();else openMissions();}
+      if(e.code==='KeyN'){
+        if(state.mode==='grind' && state.wave < state.maxWaves){
+          startWave(state.wave+1);
+        } else if(state.mode==='intro' || state.mode==='won'){
+          startWave(1);
+        }
+      }
+      if(e.code==='KeyM' && state.mode==='grind'){
+        if(typeof nextArena==='function') nextArena();
+      }if(state.spellbookOpen)return;if(e.code==='Digit1')selectLoadout(0);if(e.code==='Digit2')selectLoadout(1);if(e.code==='Digit3')selectLoadout(2);if(e.code==='Digit4')selectLoadout(3);if((e.code==='Space'||e.code==='KeyE')&&!desktopHolding){e.preventDefault();desktopHolding=true;const origin=new THREE.Vector3(0,0,-0.55).applyQuaternion(camera.quaternion).add(camera.position);const dir=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);beginCharge(currentSpell(),origin,dir,'desktop');}});
+window.addEventListener('keyup',e=>{keys[e.code]=false;if((e.code==='Space'||e.code==='KeyE')&&desktopHolding){desktopHolding=false;if(state.lightningActive&&state.lightningSource==='desktop')stopLightningBeam();else releaseCharge();}});
+let isLocked=false;const euler=new THREE.Euler(0,0,0,'YXZ');
+renderer.domElement.addEventListener('mousedown',e=>{if(renderer.xr.isPresenting||e.button!==0||state.spellbookOpen)return;renderer.domElement.requestPointerLock?.();desktopHolding=true;const origin=new THREE.Vector3(0,0,-0.55).applyQuaternion(camera.quaternion).add(camera.position);const dir=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);beginCharge(currentSpell(),origin,dir,'desktop');});
+window.addEventListener('mouseup',e=>{if(e.button!==0||!desktopHolding)return;desktopHolding=false;if(state.lightningActive&&state.lightningSource==='desktop')stopLightningBeam();else releaseCharge();});
+document.addEventListener('pointerlockchange',()=>{isLocked=document.pointerLockElement===renderer.domElement;});
+document.addEventListener('mousemove',e=>{if(!isLocked||renderer.xr.isPresenting||state.spellbookOpen)return;euler.setFromQuaternion(camera.quaternion);euler.y-=e.movementX*0.0022;euler.x-=e.movementY*0.0022;euler.x=Math.max(-1.4,Math.min(1.4,euler.x));camera.quaternion.setFromEuler(euler);});
+let touchId=null,lastTouch={x:0,y:0};
+renderer.domElement.addEventListener('touchstart',e=>{if(renderer.xr.isPresenting||state.spellbookOpen)return;const t=e.changedTouches[0];touchId=t.identifier;lastTouch={x:t.clientX,y:t.clientY};const origin=new THREE.Vector3(0,0,-0.55).applyQuaternion(camera.quaternion).add(camera.position);const dir=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);beginCharge(currentSpell(),origin,dir,'desktop');},{passive:true});
+renderer.domElement.addEventListener('touchmove',e=>{if(renderer.xr.isPresenting||touchId===null||state.spellbookOpen)return;for(const t of e.changedTouches){if(t.identifier===touchId){const dx=t.clientX-lastTouch.x,dy=t.clientY-lastTouch.y;euler.setFromQuaternion(camera.quaternion);euler.y-=dx*0.005;euler.x-=dy*0.005;euler.x=Math.max(-1.4,Math.min(1.4,euler.x));camera.quaternion.setFromEuler(euler);lastTouch={x:t.clientX,y:t.clientY};}}},{passive:true});
+renderer.domElement.addEventListener('touchend',e=>{if(renderer.xr.isPresenting)return;for(const t of e.changedTouches){if(t.identifier===touchId){if(state.lightningActive&&state.lightningSource==='desktop')stopLightningBeam();else releaseCharge();touchId=null;}}},{passive:true});
+const moveSpeed=3.2;
+function handleMovement(delta){
+  if(state.gameOver||state.spellbookOpen)return;
+  const speed=3.2;
+  _stick.set(0,0);
+
+  if(renderer.xr.isPresenting){
+    // VR: read thumbsticks from both controllers
+    const session=renderer.xr.getSession();
+    if(session){
+      for(const source of session.inputSources){
+        if(!source.gamepad)continue;
+        const axes=source.gamepad.axes;
+        // Quest: axes[2], axes[3] = thumbstick (axes[0],axes[1] often 0 or touchpad)
+        let x=0,y=0;
+        if(axes.length>=4){x=axes[2]||0;y=axes[3]||0;}
+        else if(axes.length>=2){x=axes[0]||0;y=axes[1]||0;}
+        if(Math.abs(x)<0.15)x=0;
+        if(Math.abs(y)<0.15)y=0;
+        _stick.x+=x;_stick.y+=y;
+      }
+    }
+    if(_stick.lengthSq()<0.0001)return;
+    // Head-relative horizontal movement
+    const xrCam=renderer.xr.getCamera(camera);
+    xrCam.getWorldDirection(_moveFwd);
+    _moveFwd.y=0;
+    if(_moveFwd.lengthSq()<0.0001)_moveFwd.set(0,0,-1);
+    _moveFwd.normalize();
+    _moveRight.crossVectors(_moveFwd,new THREE.Vector3(0,1,0)).normalize();
+    // stick.y is forward/back (negative = forward on Quest often)
+    dolly.position.addScaledVector(_moveFwd,-_stick.y*speed*delta);
+    dolly.position.addScaledVector(_moveRight,_stick.x*speed*delta);
+    dolly.position.x=THREE.MathUtils.clamp(dolly.position.x,-10,10);
+    dolly.position.z=THREE.MathUtils.clamp(dolly.position.z,-10,10);
+    dolly.position.y=0;
+  } else {
+    // Desktop WASD
+    _moveFwd.set(0,0,-1).applyQuaternion(camera.quaternion);_moveFwd.y=0;_moveFwd.normalize();
+    _moveRight.set(1,0,0).applyQuaternion(camera.quaternion);_moveRight.y=0;_moveRight.normalize();
+    const vel=new THREE.Vector3();
+    if(keys['KeyW']||keys['ArrowUp'])vel.add(_moveFwd);
+    if(keys['KeyS']||keys['ArrowDown'])vel.sub(_moveFwd);
+    if(keys['KeyA']||keys['ArrowLeft'])vel.sub(_moveRight);
+    if(keys['KeyD']||keys['ArrowRight'])vel.add(_moveRight);
+    if(vel.lengthSq()>0){
+      vel.normalize().multiplyScalar(speed*delta);
+      dolly.position.add(vel);
+      dolly.position.x=THREE.MathUtils.clamp(dolly.position.x,-8,8);
+      dolly.position.z=THREE.MathUtils.clamp(dolly.position.z,-8,8);
+    }
+    // keep camera local height for desktop
+    camera.position.y=1.55;
+  }
+}
+
+const controllerModelFactory=new XRControllerModelFactory();
+function createMagicalHand(color){const group=new THREE.Group();const core=new THREE.Mesh(new THREE.SphereGeometry(0.045,12,12),new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.85}));group.add(core);const glow=new THREE.Mesh(new THREE.SphereGeometry(0.08,10,10),new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.25}));group.add(glow);for(let i=0;i<4;i++){const spark=new THREE.Mesh(new THREE.SphereGeometry(0.012,6,6),new THREE.MeshBasicMaterial({color:0xffeebb}));spark.userData.angle=(i/4)*Math.PI*2;spark.userData.radius=0.09;spark.userData.speed=2.2+Math.random();group.add(spark);}const ray=new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),new THREE.Vector3(0,0,-1.2)]),new THREE.LineBasicMaterial({color,transparent:true,opacity:0.5}));group.add(ray);group.userData.core=core;group.userData.glow=glow;group.userData.sparks=group.children.filter(c=>c.userData.angle!==undefined);return group;}
+function createControllerCircle(color){const g=new THREE.Group();g.visible=false;const r1=new THREE.Mesh(new THREE.RingGeometry(0.12,0.17,28),new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.7,side:THREE.DoubleSide}));r1.rotation.x=Math.PI/2;g.add(r1);const r2=new THREE.Mesh(new THREE.RingGeometry(0.19,0.22,28),new THREE.MeshBasicMaterial({color:0xffeebb,transparent:true,opacity:0.35,side:THREE.DoubleSide}));r2.rotation.x=Math.PI/2;g.add(r2);g.userData.r1=r1;g.userData.r2=r2;return g;}
+const controllers=[];const grips=[];const magicalHands=[];const controllerCircles=[];const prevButtons=[{},{}];
+function setupController(index){const controller=renderer.xr.getController(index);dolly.add(controller);controllers[index]=controller;controller.addEventListener('selectstart',()=>{if(!state.isPresenting)return;const origin=new THREE.Vector3();const direction=new THREE.Vector3();controller.getWorldPosition(origin);controller.getWorldDirection(direction);direction.negate();beginCharge(currentSpell(),origin,direction,index);});controller.addEventListener('selectend',()=>{if(!state.isPresenting)return;if(state.lightningActive&&state.lightningSource===index)stopLightningBeam();else if(state.isCharging&&state.chargeSource===index)releaseCharge();});const grip=renderer.xr.getControllerGrip(index);grip.add(controllerModelFactory.createControllerModel(grip));dolly.add(grip);grips[index]=grip;const magicColor=index===0?0xff7744:0x66aaff;const mHand=createMagicalHand(magicColor);mHand.position.set(0,0,-0.04);grip.add(mHand);magicalHands[index]=mHand;const circ=createControllerCircle(magicColor);circ.position.set(0,0,-0.06);grip.add(circ);controllerCircles[index]=circ;}
+setupController(0);setupController(1);
+function pollControllerButtons(){if(!state.isPresenting)return;const session=renderer.xr.getSession();if(!session)return;for(const source of session.inputSources){if(!source.gamepad||!source.handedness)continue;const idx=source.handedness==='left'?0:1;const gp=source.gamepad;const prev=prevButtons[idx];const controller=controllers[idx];if(!controller)continue;const squeeze=gp.buttons[1];if(squeeze&&squeeze.pressed&&!prev.squeeze){let lightningId=progress.loadout.find(id=>getSpellDef(id)?.type==='lightning');if(lightningId){const sp=getSpellDef(lightningId);const origin=new THREE.Vector3();const direction=new THREE.Vector3();controller.getWorldPosition(origin);controller.getWorldDirection(direction);direction.negate();const prevIdx=state.selectedLoadoutIndex;state.selectedLoadoutIndex=progress.loadout.indexOf(lightningId);beginCharge(sp,origin,direction,idx);state.selectedLoadoutIndex=prevIdx;}}if(squeeze&&!squeeze.pressed&&prev.squeeze){if(state.lightningActive&&state.lightningSource===idx)stopLightningBeam();}prev.squeeze=squeeze?squeeze.pressed:false;}}
+renderer.xr.addEventListener('sessionstart',()=>{state.isPresenting=true;document.body.classList.add('xr-presenting');document.getElementById('vr-hint').style.display='block';handsGroup.visible=false;closeSpellbook();showMessage('Hold Trigger to charge',2.2);});
+renderer.xr.addEventListener('sessionend',()=>{state.isPresenting=false;document.body.classList.remove('xr-presenting');document.getElementById('vr-hint').style.display='none';handsGroup.visible=true;stopLightningBeam();cancelCharge();dolly.position.set(0,0,0);camera.position.set(0,1.55,4.5);});
+const vrBtn=VRButton.createButton(renderer);vrBtn.style.position='static';document.getElementById('vr-container').appendChild(vrBtn);
+
+const clock=new THREE.Clock();const tempV=new THREE.Vector3();
+function update(delta){const t=performance.now()*0.001;for(const id of Object.keys(state.cooldown)){if(state.cooldown[id]>0)state.cooldown[id]=Math.max(0,state.cooldown[id]-delta);}crystals.forEach(c=>{c.rotation.y+=c.userData.spin*delta;c.position.y+=Math.sin(t*1.5+c.userData.bob)*0.003;});if(!state.isPresenting){[leftHand,rightHand].forEach(hand=>{hand.children.forEach((ch,idx)=>{if(idx===0)return;ch.userData.angle+=delta*2.8;ch.position.x=Math.cos(ch.userData.angle)*ch.userData.radius;ch.position.z=Math.sin(ch.userData.angle)*ch.userData.radius;ch.position.y=Math.sin(ch.userData.angle*2)*0.04;});});}magicalHands.forEach((hand,idx)=>{if(!hand)return;hand.userData.sparks.forEach(spark=>{spark.userData.angle+=delta*spark.userData.speed;spark.position.x=Math.cos(spark.userData.angle)*spark.userData.radius;spark.position.z=Math.sin(spark.userData.angle)*spark.userData.radius*0.6;spark.position.y=Math.sin(spark.userData.angle*1.7)*0.03;});if(state.isCharging&&state.chargeSource===idx){
+          const c=state.charge;
+          const pulse=1+Math.sin(performance.now()*0.015)*0.1*c;
+          const s=(1+c*0.9)*pulse;
+          hand.userData.core.scale.setScalar(s);
+          hand.userData.glow.scale.setScalar(s*1.15);
+          hand.userData.glow.material.opacity=0.3+c*0.5;
+          hand.userData.core.material.opacity=0.85+c*0.15;
+          const circ=controllerCircles[idx];
+          if(circ){
+            circ.visible=true;
+            circ.scale.setScalar((0.85+c*0.9)*pulse);
+            circ.rotation.y+=delta*(2.5+c*5);
+            circ.userData.r1.material.opacity=0.5+c*0.5;
+            if(circ.userData.r2)circ.userData.r2.material.opacity=0.25+c*0.4;
+          }
+        }else{
+          hand.userData.core.scale.setScalar(1);
+          hand.userData.glow.scale.setScalar(1);
+          hand.userData.glow.material.opacity=0.25;
+          hand.userData.core.material.opacity=0.85;
+          if(controllerCircles[idx])controllerCircles[idx].visible=false;
+        }});if(state.isCharging||state.lightningActive){let origin=null,direction=null;const src=state.isCharging?state.chargeSource:state.lightningSource;if(src==='desktop'){origin=new THREE.Vector3(0,0,-0.55).applyQuaternion(camera.quaternion).add(camera.position);direction=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);}else if(controllers[src]){origin=new THREE.Vector3();direction=new THREE.Vector3();controllers[src].getWorldPosition(origin);controllers[src].getWorldDirection(direction);direction.negate();}if(state.isCharging&&origin)updateCharge(delta,origin,direction);if(state.lightningActive&&origin){updateLightningBeam(origin,direction);const spell=getSpellDef(state.lightningSpellId)||SPELL_DEFS.find(s=>s.type==='lightning');const drain=spell?spell.cost*2.2:18;state.playerMp=Math.max(0,state.playerMp-drain*delta);updateHud();if(state.playerMp<=0)stopLightningBeam();lightningTickTimer+=delta;if(lightningTickTimer>=LIGHTNING_TICK){lightningTickTimer=0;if(activeBeam&&state.enemyHp>0){const dist=activeBeam.end.distanceTo(enemy.position);if(dist<1.1){
+                  const frozen=performance.now()<state.frozenUntil;
+                  let dmg=spell?.damage||9;
+                  if(frozen&&isSpellUnlocked('ice_shard')&&isSpellUnlocked('lightning')){
+                    dmg=Math.floor(dmg*2.6)+12;
+                    spawnShatterEffect(enemy.position.clone().add(new THREE.Vector3(0,0.3,0)));
+                    state.frozenUntil=0;iceShell.visible=false;
+                    discoverCombo('shatterstorm');
+                    showMessage('Shatterstorm!',1.2);
+                  }else{
+                    spawnExplosion(enemy.position.clone().add(new THREE.Vector3(0,0.3,0)),0x88ccff,0.4);
+                  }
+                  damageEnemy(dmg);
+                }}}}}pollControllerButtons();if(state.enemyHp>0){state.inCombat=true;const frozen=performance.now()<state.frozenUntil;iceShell.visible=frozen;if(enemy.userData.stagger>0){
+  enemy.userData.stagger-=delta;
+  const t=1-Math.max(0,enemy.userData.stagger)/0.45;
+  const squash=1-Math.sin(t*Math.PI)*0.12;
+  enemy.scale.set(squash,1+(1-squash)*0.7,squash);
+  // knockback nudge
+  if(enemy.userData.hitDir){
+    enemy.position.x+=enemy.userData.hitDir.x*delta*1.2*(1-t);
+    enemy.position.z+=enemy.userData.hitDir.z*delta*1.2*(1-t);
+  }
+}else enemy.scale.setScalar(1);if(!frozen){enemy.position.y=enemy.userData.baseY+Math.sin(t*1.8)*0.12;tempV.copy(camera.position);tempV.y=enemy.position.y;enemy.lookAt(tempV);if(t-state.lastAttack>state.enemyAttackCooldown&&enemy.userData.stagger<=0){state.lastAttack=t;const origin=enemy.position.clone().add(new THREE.Vector3(0,0.3,0));const dir=camera.position.clone().sub(origin).normalize();const bolt=new THREE.Mesh(new THREE.SphereGeometry(0.12,8,8),new THREE.MeshBasicMaterial({color:0xcc44ff}));bolt.position.copy(origin);bolt.userData.vel=dir.multiplyScalar(7);bolt.userData.life=2.5;bolt.userData.isEnemy=true;scene.add(bolt);projectiles.push(bolt);}bodyMat.emissive.setHex(0x3a1055);bodyMat.emissiveIntensity=0.45;}else{bodyMat.emissive.setHex(0x66aacc);bodyMat.emissiveIntensity=0.7;}}if(enemy.userData.hitFlash>0){enemy.userData.hitFlash-=delta;bodyMat.emissiveIntensity=1.35;}for(let i=projectiles.length-1;i>=0;i--){const p=projectiles[i];p.position.addScaledVector(p.userData.vel,delta);p.userData.life-=delta;
+        if(p.userData.spinSpeed){p.rotation.x+=p.userData.spinSpeed*delta;p.rotation.y+=p.userData.spinSpeed*0.7*delta;}
+        // pulse glow
+        if(p.children[0]&&p.children[0].material){p.children[0].material.opacity=0.25+Math.sin(performance.now()*0.02)*0.1;}if(p.userData.isEnemy){if(p.position.distanceTo(camera.getWorldPosition(new THREE.Vector3()))<0.55){damagePlayer(p.userData.damage||12);spawnExplosion(p.position,0xcc44ff,0.6);scene.remove(p);projectiles.splice(i,1);continue;}}else{{
+          let hit=false;
+          for(const ent of state.enemies){
+            if(!ent.userData.alive) continue;
+            if(p.position.distanceTo(ent.position)<0.85*ent.userData.scale+(p.userData.charge||0)*0.25){
+              const dmg=p.userData.damage||p.userData.spell.damage;
+              const isIce=p.userData.spell.type==='ice';
+              const freezeT=p.userData.spell.tier>=2?3200:2400;
+              damageEnemyEntity(ent,dmg,isIce,freezeT);
+              const scale=0.8+(p.userData.charge||0)*0.9+(p.userData.spell.tier-1)*0.2;
+              const col=p.userData.spell.school==='fire'?0xff5a00:p.userData.spell.school==='ice'?0x66ddff:0xa8e6cf;
+              spawnExplosion(p.position,col,scale);
+              hit=true; break;
+            }
+          }
+          if(hit){ scene.remove(p); projectiles.splice(i,1); continue; }
+        }}if(p.userData.life<=0||p.position.y<-1||p.position.length()>30){scene.remove(p);projectiles.splice(i,1);}}for(let i=effects.length-1;i>=0;i--){const e=effects[i];if(e.isBolt){e.life-=delta;e.mesh.material.opacity=Math.max(0,e.life*5);if(e.life<=0){scene.remove(e.mesh);effects.splice(i,1);}}else{let alive=false;e.children.forEach(ch=>{
+            if(ch.userData.life===undefined)return;
+            ch.userData.life-=delta;
+            if(ch.userData.vel)ch.position.addScaledVector(ch.userData.vel,delta);
+            if(ch.userData.spin)ch.rotation.x+=ch.userData.spin*delta;
+            if(ch.userData.isCore){ch.scale.multiplyScalar(1+delta*3.5);ch.material.opacity=Math.max(0,ch.userData.life*4);}
+            else if(ch.userData.isRing){ch.scale.multiplyScalar(1+delta*6);ch.material.opacity=Math.max(0,ch.userData.life*2.5);}
+            else{ch.material.opacity=Math.max(0,ch.userData.life*2.2);ch.scale.multiplyScalar(0.96);}
+            if(ch.userData.life>0)alive=true;
+          });if(!alive){scene.remove(e);effects.splice(i,1);}}}// Inferno Tornadoes
+for(let i=state.activeTornadoes.length-1;i>=0;i--){
+  const tor=state.activeTornadoes[i];
+  tor.position.addScaledVector(tor.userData.vel,delta);
+  tor.userData.life-=delta;
+  tor.rotation.y+=delta*4;
+  tor.children.forEach(ch=>{if(ch.userData.spin)ch.rotation.z+=ch.userData.spin*delta;});
+  tor.userData.tick+=delta;
+  if(tor.userData.tick>=0.25){
+    tor.userData.tick=0;
+    state.enemies.forEach(ent=>{
+      if(!ent.userData.alive)return;
+      if(tor.position.distanceTo(ent.position)<1.3*ent.userData.scale){
+        damageEnemyEntity(ent, Math.floor(6*tor.userData.power));
+        spawnExplosion(ent.position.clone().add(new THREE.Vector3(0,0.2,0)),0xff5a00,0.5);
+      }
+    });
+  }
+  if(tor.userData.life<=0||tor.position.y<-1||tor.position.length()>25){
+    scene.remove(tor);state.activeTornadoes.splice(i,1);
+  }
+}
+
+// Multi-enemy AI
+const camWorld = camera.getWorldPosition(new THREE.Vector3());
+state.enemies.forEach(ent => {
+  if(!ent.userData.alive) return;
+  const ud = ent.userData;
+  const frozen = ud.frozenUntil && performance.now() < ud.frozenUntil;
+  if(ud.hitFlash > 0){ ud.hitFlash -= delta; ud.mat.emissiveIntensity = 1.4; }
+  else if(!frozen){ ud.mat.emissiveIntensity = 0.35; }
+  if(ud.stagger > 0){
+    ud.stagger -= delta;
+    const t = 1 - Math.max(0, ud.stagger)/0.45;
+    const squash = 1 - Math.sin(t*Math.PI)*0.12;
+    ent.scale.set(squash, 1+(1-squash)*0.7, squash);
+    if(ud.hitDir){ ent.position.x += ud.hitDir.x*delta*1.1*(1-t); ent.position.z += ud.hitDir.z*delta*1.1*(1-t); }
+  } else ent.scale.setScalar(1);
+  // billboard hp
+  ud.hpBg.lookAt(camWorld); ud.hpFill.lookAt(camWorld);
+  if(frozen) return;
+  // bob
+  ent.position.y = ud.baseY + Math.sin(performance.now()*0.002 + ent.id)*0.1;
+  // face player
+  const look = camWorld.clone(); look.y = ent.position.y; ent.lookAt(look);
+  // move toward player if speed > 0
+  if(ud.def.speed > 0){
+    const to = camWorld.clone().sub(ent.position); to.y = 0;
+    const dist = to.length();
+    if(dist > 1.8){ to.normalize(); ent.position.addScaledVector(to, ud.def.speed*delta); }
+  }
+  // attack
+  ud.attackCd -= delta;
+  if(ud.attackCd <= 0){
+    ud.attackCd = 1.8 + Math.random()*1.2;
+    const origin = ent.position.clone().add(new THREE.Vector3(0,0.25,0));
+    const dir = camWorld.clone().sub(origin).normalize();
+    const bolt = new THREE.Mesh(
+      new THREE.SphereGeometry(0.1, 8, 8),
+      new THREE.MeshBasicMaterial({ color: ud.def.color })
+    );
+    bolt.position.copy(origin);
+    bolt.userData.vel = dir.multiplyScalar(6.5);
+    bolt.userData.life = 2.5;
+    bolt.userData.isEnemy = true;
+    bolt.userData.damage = ud.def.damage;
+    scene.add(bolt);
+    projectiles.push(bolt);
+  }
+});
+// grind auto-spawn trickle
+if(state.mode==='grind' && !state.gameOver){
+  state._grindTimer = (state._grindTimer||0) + delta;
+  if(state._grindTimer > 3.5){ state._grindTimer = 0; spawnGrindEnemy(); }
+}
+if(!state.gameOver&&state.playerMp<state.playerMaxMp){const rate=(state.isCharging||state.lightningActive)?2.5:7.5;state.playerMp=Math.min(state.playerMaxMp,state.playerMp+rate*delta);updateHud();}handleMovement(delta);hpBarBg.lookAt(camera.position);hpBar.lookAt(camera.position);const ratio=Math.max(0.01,state.enemyHp/state.enemyMaxHp);hpBar.scale.x=ratio;hpBar.position.x=-0.6*(1-ratio);}
+renderer.setAnimationLoop(()=>{const delta=Math.min(clock.getDelta(),0.05);update(delta);renderer.render(scene,camera);});
+window.addEventListener('resize',()=>{camera.aspect=window.innerWidth/window.innerHeight;camera.updateProjectionMatrix();renderer.setSize(window.innerWidth,window.innerHeight);});
+loadProgress();if(typeof ensureMissionProgress==='function')ensureMissionProgress();rebuildSpellBar();
+document.getElementById('start-btn').addEventListener('click',()=>{initAudio();if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume();state.audioReady=true;document.getElementById('audio-unlock').style.display='none';document.getElementById('hud').style.display='block';state.inCombat=true;updateHud();
+      if(typeof enemy!=='undefined') enemy.visible=false;
+      if(typeof buildArena==='function') buildArena(0);
+      showMessage('Emerald Clearing\nGrind for XP · M = change arena\nN = start Wave 1', 3.5);
+      startGrind();});
+  </script>
+</body>
+</html>
