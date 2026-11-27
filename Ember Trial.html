@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ember Trial</title>
+<style>
+:root{--bg:#14110f;--fg:#f2e6d0;--ac:#e8a33d;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14110f;--fg:#f2e6d0;--ac:#e8a33d}}
+:root[data-theme="dark"]{--bg:#14110f;--fg:#f2e6d0;--ac:#e8a33d}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:Georgia,serif;overflow:hidden}
+canvas{display:block}
+#ui{position:fixed;left:0;right:0;bottom:calc(16px + env(safe-area-inset-bottom,0px));text-align:center}
+#btn{background:var(--ac);color:#1a1209;border:0;border-radius:10px;padding:14px 26px;font:700 18px Georgia,serif}
+#msg{margin-top:8px;font-size:14px;opacity:.85}
+</style></head><body>
+<div id="ui"><button id="btn">Enter VR</button><div id="msg">Meta Quest 2: Sword in right hand. Left trigger tap: fireball. Hold it and flick down: lightning. Hold it with hand above head: shield. Left grip: bow, then right trigger to draw and release. Right grip: swap sword/hammer. Left stick moves, right stick turns.</div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x14110f);scene.fog=new THREE.Fog(0x14110f,8,30);
+const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,0.05,60);
+const rig=new THREE.Group();rig.add(camera);scene.add(rig);camera.position.set(0,1.6,0);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);renderer.xr.enabled=true;
+document.body.appendChild(renderer.domElement);
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+// Arena
+scene.add(new THREE.HemisphereLight(0xffddaa,0x221a14,0.8));
+const floor=new THREE.Mesh(new THREE.CircleGeometry(13,48),new THREE.MeshStandardMaterial({color:0x3a312a,roughness:1}));
+floor.rotation.x=-Math.PI/2;scene.add(floor);
+const pm=new THREE.MeshStandardMaterial({color:0x5a4c40,roughness:.9});
+for(let i=0;i<16;i++){const a=i/16*Math.PI*2;const p=new THREE.Mesh(new THREE.CylinderGeometry(.5,.6,5,8),pm);p.position.set(Math.cos(a)*13,2.5,Math.sin(a)*13);scene.add(p);
+ if(i%4==0){const l=new THREE.PointLight(0xff8833,1.2,14);l.position.set(Math.cos(a)*11.5,3,Math.sin(a)*11.5);scene.add(l)}}
+
+// Game state
+const S={mode:'start',wave:0,hp:100,maxHp:100,mana:100,swordMul:1,spellMul:1,armor:0,regen:8,score:0,toSpawn:0,spawnT:0,hudT:0,msg:''};
+const enemies=[],shots=[],booms=[],cards=[],arrows=[],eShots=[],bolts=[];
+Object.assign(S,{weapon:'sword',shield:0,arrowMul:1,boltMul:1,bow:false,draw:false,lDown:false,lT:0,lDone:false});
+const V=new THREE.Vector3(),V2=new THREE.Vector3(),V3=new THREE.Vector3();
+
+// Controllers
+const hands={};
+for(let i=0;i<2;i++){const c=renderer.xr.getController(i);rig.add(c);
+ c.addEventListener('connected',e=>{c.userData.src=e.data;hands[e.data.handedness]=c;
+  if(e.data.handedness==='right'){c.add(sword);c.add(hammer)}else{c.add(orb);c.add(bow)}});
+ c.addEventListener('selectstart',()=>{if(c===hands.left){S.lDown=true;S.lT=0;S.lDone=false}else if(S.bow)S.draw=true});
+ c.addEventListener('selectend',()=>{if(c===hands.left){if(!S.lDone&&S.lT<.3)cast(c);S.lDown=false}else if(S.draw){S.draw=false;fire()}});
+ c.addEventListener('squeezestart',()=>{if(c===hands.left)S.bow=true;else S.weapon=S.weapon==='sword'?'hammer':'sword';showW()});
+ c.addEventListener('squeezeend',()=>{if(c===hands.left){S.bow=false;S.draw=false;showW()}});}
+const sword=new THREE.Group();
+const blade=new THREE.Mesh(new THREE.BoxGeometry(.05,.012,.8),new THREE.MeshStandardMaterial({color:0xcfd6dc,metalness:.9,roughness:.25}));blade.position.z=-.6;
+const guard=new THREE.Mesh(new THREE.BoxGeometry(.18,.03,.03),new THREE.MeshStandardMaterial({color:0x8a6a2a}));guard.position.z=-.2;
+const grip=new THREE.Mesh(new THREE.CylinderGeometry(.018,.018,.16),new THREE.MeshStandardMaterial({color:0x2a1a10}));grip.rotation.x=Math.PI/2;
+sword.add(blade,guard,grip);
+const orb=new THREE.Mesh(new THREE.SphereGeometry(.05,16,16),new THREE.MeshBasicMaterial({color:0xff7a1a}));orb.position.z=-.08;
+function buzz(c,s,ms){try{c.userData.src.gamepad.hapticActuators[0].pulse(s,ms)}catch(e){}}
+const bow=new THREE.Group(),arc=new THREE.Mesh(new THREE.TorusGeometry(.35,.015,6,16,Math.PI),new THREE.MeshStandardMaterial({color:0x8a5a2a}));arc.rotation.z=Math.PI/2;bow.add(arc);bow.rotation.y=-Math.PI/2;bow.visible=false;
+const shieldM=new THREE.Mesh(new THREE.SphereGeometry(1.3,16,12),new THREE.MeshBasicMaterial({color:0x55aaff,transparent:true,opacity:.18,side:THREE.BackSide}));shieldM.visible=false;camera.add(shieldM);
+function hurtPlayer(d){if(S.shield>0)return;S.hp-=d*(1-S.armor);sfx('hurt');['left','right'].forEach(h=>hands[h]&&buzz(hands[h],.8,120))}
+function fire(){if(!hands.left||!hands.right)return;hands.left.getWorldPosition(V);hands.right.getWorldPosition(V2);const d=V.distanceTo(V2);if(d<.15)return;const pw=Math.min(1,d/.6);
+ const a=new THREE.Mesh(new THREE.CylinderGeometry(.01,.01,.6),new THREE.MeshBasicMaterial({color:0xddc08a}));a.position.copy(V);const dir=V.clone().sub(V2).normalize();
+ a.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir);a.userData={v:dir.multiplyScalar(8+18*pw),life:4,pw};scene.add(a);arrows.push(a);buzz(hands.right,.6,50);sfx('bow')}
+function bolt(){S.lDone=true;S.mana-=35;sfx('zap');camera.getWorldPosition(V);let prev=V.clone().setY(V.y-.3);
+ enemies.filter(e=>!e.userData.dead&&e.position.distanceTo(V)<14).sort((a,b)=>a.position.distanceTo(V)-b.position.distanceTo(V)).slice(0,4).forEach(e=>{const p=e.position.clone().setY(1);
+  const l=new THREE.Line(new THREE.BufferGeometry().setFromPoints([prev,p]),new THREE.LineBasicMaterial({color:0xaaddff}));l.userData.life=.25;scene.add(l);bolts.push(l);
+  hurtEnemy(e,45*S.spellMul*S.boltMul,new THREE.Vector3(),0);prev=p});buzz(hands.left,1,150)}
+function enemyShot(e,P){const m=new THREE.Mesh(new THREE.SphereGeometry(.1,8,8),new THREE.MeshBasicMaterial({color:0xff2244}));m.position.set(e.position.x,1.3,e.position.z);
+ const d=new THREE.Vector3(P.x,P.y-.2,P.z).sub(m.position).normalize();m.userData={v:d.multiplyScalar(5.5),life:5,d:7};scene.add(m);eShots.push(m)}
+let AC=null;
+function audioInit(){if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}}if(AC&&AC.state==='suspended')AC.resume()}
+function tone(f,t,type,vol,slide){if(!AC)return;const n=AC.currentTime,o=AC.createOscillator(),g=AC.createGain();o.type=type;o.frequency.setValueAtTime(f,n);if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(20,f*slide),n+t);g.gain.setValueAtTime(vol,n);g.gain.exponentialRampToValueAtTime(.001,n+t);o.connect(g).connect(AC.destination);o.start();o.stop(n+t)}
+function noise(t,vol,f){if(!AC)return;const n=AC.currentTime,len=AC.sampleRate*t,b=AC.createBuffer(1,len,AC.sampleRate),d=b.getChannelData(0);for(let i=0;i<len;i++)d[i]=Math.random()*2-1;const s=AC.createBufferSource(),fl=AC.createBiquadFilter(),g=AC.createGain();s.buffer=b;fl.type='bandpass';fl.frequency.value=f;g.gain.setValueAtTime(vol,n);g.gain.exponentialRampToValueAtTime(.001,n+t);s.connect(fl).connect(g).connect(AC.destination);s.start()}
+function sfx(k,v){v=v||1;switch(k){case 'hit':noise(.12,.5*v,1800);tone(140,.15,'square',.25*v,.5);break;case 'thud':noise(.25,.7*v,300);tone(70,.3,'sine',.6*v,.4);break;case 'parry':tone(1600,.35,'triangle',.4,.7);tone(2400,.25,'square',.12,.6);noise(.1,.3,4000);break;case 'fire':noise(.3,.3,900);tone(300,.3,'sawtooth',.15,2);break;case 'boom':noise(.4,.6,250);tone(90,.4,'sine',.5,.3);break;case 'zap':noise(.25,.5,3500);tone(900,.25,'sawtooth',.2,.3);break;case 'shield':tone(300,.6,'sine',.3,2.5);break;case 'bow':tone(500,.15,'triangle',.3,.4);noise(.08,.2,2500);break;case 'swish':noise(.12,.12*v,2200);break;case 'warn':tone(110,.3,'sawtooth',.1,1.3);break;case 'hurt':tone(120,.3,'square',.45,.4);noise(.2,.4,500);break;case 'wave':tone(196,.6,'sawtooth',.25,1);tone(294,.7,'sawtooth',.2,1);break;case 'die':tone(220,.5,'sawtooth',.3,.3);break;case 'pick':tone(660,.2,'triangle',.3,1.5);break}}
+const hammer=new THREE.Group(),hh=new THREE.Mesh(new THREE.CylinderGeometry(.02,.02,.9),new THREE.MeshStandardMaterial({color:0x6a4a2a})),hd=new THREE.Mesh(new THREE.BoxGeometry(.28,.2,.2),new THREE.MeshStandardMaterial({color:0x888e96,metalness:.8,roughness:.4}));hh.rotation.x=Math.PI/2;hh.position.z=-.45;hd.position.z=-.92;hammer.add(hh,hd);hammer.visible=false;
+function showW(){sword.visible=!S.bow&&S.weapon==='sword';hammer.visible=!S.bow&&S.weapon==='hammer';bow.visible=S.bow}
+function spark(p){const m=new THREE.Mesh(new THREE.SphereGeometry(.12,8,8),new THREE.MeshBasicMaterial({color:0xffffcc,transparent:true,opacity:.9}));m.position.copy(p);m.userData.t=0;scene.add(m);booms.push(m)}
+function swing(e,u,d,dt,pts,speed,P){const R=u.boss?3.8:2,wp=u.wp;u.t+=dt;
+ if(u.atk===0){u.bm.color.setHex(0x99a0a8);const k=Math.min(1,dt*8);wp.rotation.x+=(.4-wp.rotation.x)*k;wp.rotation.z*=1-k;if(u.cd<=0&&d<R){u.atk=1;u.t=0;u.hitDone=false;sfx('warn')}}
+ else if(u.atk===1){const k=Math.min(1,u.t/(u.boss?.8:.6));wp.rotation.x=.4-2.5*k;wp.rotation.z=.9*k;u.bm.color.setHex(0xff3322);if(k>=1){u.atk=2;u.t=0}}
+ else if(u.atk===2){const k=Math.min(1,u.t/.22);wp.rotation.x=-2.1+2.9*k;wp.rotation.z=.9-1.4*k;if(!u.hitDone&&k>.35&&d<R+.3){u.hitDone=true;hurtPlayer(u.dmg)}if(k>=1){u.atk=3;u.t=0}}
+ else if(u.atk===3){u.bm.color.setHex(0x99a0a8);if(u.t>.45){u.atk=0;u.cd=u.boss?1.8:1.2}}
+ else if(u.atk===4){wp.rotation.x=-.8;wp.rotation.z=1.2;if(u.t>(u.boss?.9:1.4)){u.atk=0;u.cd=.5}}
+ if((u.atk===1||u.atk===2)&&speed>1.2&&pts.length){e.updateMatrixWorld(true);const bp=[-.5,0,.5].map(z=>u.bl.localToWorld(new THREE.Vector3(0,0,z)));
+  if(pts.some(p=>bp.some(q=>p.distanceTo(q)<.4))){u.atk=4;u.t=0;u.bm.color.setHex(0xffffff);u.kv.copy(e.position).sub(P).setY(0).normalize().multiplyScalar(u.boss?2:5);
+   S.mana=Math.min(100,S.mana+15);S.parryT=1;buzz(hands.right,1,200);spark(bp[2]);sfx('parry')}}}
+function slam(e){const m=new THREE.Mesh(new THREE.SphereGeometry(1,16,8),new THREE.MeshBasicMaterial({color:0xff2200,transparent:true,opacity:.6}));m.position.copy(e.position);m.userData.t=0;scene.add(m);booms.push(m)}
+
+// HUD (head-locked)
+const hc=document.createElement('canvas');hc.width=512;hc.height=200;const hx=hc.getContext('2d');
+const hudTex=new THREE.CanvasTexture(hc);
+const hud=new THREE.Mesh(new THREE.PlaneGeometry(.6,.234),new THREE.MeshBasicMaterial({map:hudTex,transparent:true,depthTest:false}));
+hud.position.set(0,-.38,-1);hud.renderOrder=10;camera.add(hud);
+function drawHud(){hx.clearRect(0,0,512,200);hx.fillStyle='rgba(10,8,6,.55)';hx.fillRect(0,0,512,200);
+ hx.font='bold 30px Georgia';hx.fillStyle='#f2e6d0';hx.textAlign='center';hx.fillText(S.parryT>0?'PARRY!':S.msg,256,40);
+ hx.fillStyle='#400';hx.fillRect(30,70,452,26);hx.fillStyle='#d33';hx.fillRect(30,70,452*Math.max(0,S.hp/S.maxHp),26);
+ hx.fillStyle='#012';hx.fillRect(30,108,452,18);hx.fillStyle='#38f';hx.fillRect(30,108,452*(S.mana/100),18);
+ hx.font='26px Georgia';hx.fillStyle='#e8a33d';hx.fillText('Wave '+S.wave+'   Slain '+S.score,256,170);hudTex.needsUpdate=true}
+
+// Cards (choose by slashing them)
+function cardTex(t,d){const c=document.createElement('canvas');c.width=256;c.height=320;const x=c.getContext('2d');
+ x.fillStyle='#2b2118';x.fillRect(0,0,256,320);x.strokeStyle='#e8a33d';x.lineWidth=8;x.strokeRect(6,6,244,308);
+ x.fillStyle='#e8a33d';x.font='bold 30px Georgia';x.textAlign='center';x.fillText(t,128,70);
+ x.fillStyle='#f2e6d0';x.font='22px Georgia';let y=130,line='';
+ d.split(' ').forEach(w=>{if((line+w).length>16){x.fillText(line,128,y);y+=30;line=''}line+=w+' '});x.fillText(line,128,y);
+ return new THREE.CanvasTexture(c)}
+function showCards(list){clearCards();camera.getWorldPosition(V);camera.getWorldDirection(V2);V2.y=0;V2.normalize();
+ const side=V3.set(-V2.z,0,V2.x);
+ list.forEach((o,i)=>{const m=new THREE.Mesh(new THREE.PlaneGeometry(.55,.69),new THREE.MeshBasicMaterial({map:cardTex(o.t,o.d),side:2}));
+  const off=(i-(list.length-1)/2)*.7;m.position.set(V.x+V2.x*2+side.x*off,1.5,V.z+V2.z*2+side.z*off);
+  m.lookAt(V.x,1.5,V.z);m.userData.o=o;scene.add(m);cards.push(m)})}
+function clearCards(){cards.forEach(m=>scene.remove(m));cards.length=0}
+const UPS=[
+ {t:'Heavy Blade',d:'Sword strikes hit 30% harder',f:()=>S.swordMul*=1.3},
+ {t:'Vitality',d:'Max health up 30 and heal fully',f:()=>{S.maxHp+=30;S.hp=S.maxHp}},
+ {t:'Arcane Focus',d:'Fire spells 40% stronger, mana returns faster',f:()=>{S.spellMul*=1.4;S.regen+=4}},
+ {t:'Ironhide',d:'Take 20% less damage',f:()=>S.armor=Math.min(.6,S.armor+.2)},
+ {t:'Second Wind',d:'Heal 50 health now',f:()=>S.hp=Math.min(S.maxHp,S.hp+50)},
+ {t:'Sharp Arrows',d:'Arrows hit 50% harder',f:()=>S.arrowMul*=1.5},
+ {t:'Storm Caller',d:'Lightning 50% stronger',f:()=>S.boltMul*=1.5}];
+function offerUpgrades(){S.mode='pick';S.msg='Slash a card to choose';
+ showCards([...UPS].sort(()=>Math.random()-.5).slice(0,3))}
+
+// Enemies
+const bone=new THREE.MeshStandardMaterial({color:0xd9d0bd,roughness:.8});
+function spawn(type){type=type||(S.wave>=2&&Math.random()<.25?'archer':S.wave>=3&&Math.random()<.25?'brute':'skel');const brute=type==='brute'||type==='boss';const g=new THREE.Group();
+ const body=new THREE.Mesh(new THREE.BoxGeometry(.5,1,.3),bone);body.position.y=.8;
+ const head=new THREE.Mesh(new THREE.SphereGeometry(.2,12,12),bone);head.position.y=1.5;
+ const arm=new THREE.Mesh(new THREE.BoxGeometry(.08,.08,.7),new THREE.MeshStandardMaterial({color:0x777}));arm.position.set(.35,1,-.3);
+ const eyes=new THREE.Mesh(new THREE.BoxGeometry(.2,.04,.05),new THREE.MeshBasicMaterial({color:0xff3311}));eyes.position.set(0,1.52,.18);
+ const wp=new THREE.Group();wp.position.set(.35,1.2,.1);const bm=new THREE.MeshBasicMaterial({color:0x99a0a8});const bl=new THREE.Mesh(new THREE.BoxGeometry(.07,.07,1.1),bm);bl.position.z=.6;wp.add(bl);wp.rotation.x=.4;wp.visible=type!=='archer';g.add(body,head,eyes,wp);const a=Math.random()*Math.PI*2;g.position.set(Math.cos(a)*11,0,Math.sin(a)*11);
+ const sc=type==='boss'?2.6:brute?1.5:1;g.scale.setScalar(sc);if(type==='archer')body.material=new THREE.MeshStandardMaterial({color:0x6a8a5a});if(type==='boss')body.material=new THREE.MeshStandardMaterial({color:0x7a2a2a});
+ const hp=type==='boss'?350+S.wave*40:(22+S.wave*6)*(brute?3:1);g.userData={hp,max:hp,type,boss:type==='boss',speed:(brute?.8:1.1)+S.wave*.05,r:.5*sc,cd:1,hit:0,kv:new THREE.Vector3(),dmg:type==='boss'?25:brute?16:9,dead:0,wp,bm,bl,atk:0,t:0};
+ scene.add(g);enemies.push(g)}
+function startWave(){S.wave++;S.mode='fight';S.toSpawn=3+S.wave*2;S.spawnT=0;S.msg='Wave '+S.wave;sfx('wave');if(S.wave%5==0){S.toSpawn=3;S.msg='BOSS wave '+S.wave;spawn('boss')}}
+function hurtEnemy(e,d,dir,kb){const u=e.userData;if(u.atk===4)d*=1.6;u.hp-=d;u.kv.copy(dir).multiplyScalar(u.boss?kb*.2:kb);
+ if(u.hp<=0&&!u.dead){u.dead=1;S.score++;S.mana=Math.min(100,S.mana+10)}}
+
+// Spells
+function cast(c){if(S.mode!=='fight'||S.mana<25)return;S.mana-=25;
+ const m=new THREE.Mesh(new THREE.SphereGeometry(.12,12,12),new THREE.MeshBasicMaterial({color:0xff7a1a}));
+ c.getWorldPosition(m.position);c.getWorldDirection(V);m.userData.v=V.clone().multiplyScalar(-14);m.userData.life=2.5;scene.add(m);shots.push(m);buzz(c,.5,40);sfx('fire')}
+function boom(p){sfx('boom');const m=new THREE.Mesh(new THREE.SphereGeometry(1,16,16),new THREE.MeshBasicMaterial({color:0xffaa33,transparent:true,opacity:.7}));
+ m.position.copy(p);m.userData.t=0;scene.add(m);booms.push(m);
+ enemies.forEach(e=>{if(e.userData.dead)return;V.copy(e.position);V.y=.9;if(V.distanceTo(p)<2){V2.copy(V).sub(p).setY(0).normalize();hurtEnemy(e,28*S.spellMul,V2,6)}})}
+
+// Update
+let prevTip=new THREE.Vector3(),tipOK=false,last=performance.now();
+function axes(c){const g=c&&c.userData.src&&c.userData.src.gamepad;if(!g)return[0,0];const a=g.axes;return a.length>=4?[a[2],a[3]]:[a[0]||0,a[1]||0]}
+function step(){const now=performance.now();const dt=Math.min(.05,(now-last)/1000);last=now;
+ camera.getWorldPosition(V);const P=V.clone();
+ // locomotion
+ const [lx,ly]=axes(hands.left);const [rx]=axes(hands.right);
+ if(Math.abs(lx)>.15||Math.abs(ly)>.15){camera.getWorldDirection(V2);V2.y=0;V2.normalize();V3.set(-V2.z,0,V2.x);
+  rig.position.addScaledVector(V2,-ly*2.6*dt).addScaledVector(V3,lx*2.6*dt);
+  const r=Math.hypot(rig.position.x,rig.position.z);if(r>11)rig.position.multiplyScalar(11/r)}
+ if(Math.abs(rx)>.7&&!step.snapped){step.snapped=1;camera.getWorldPosition(V);rig.rotation.y-=Math.sign(rx)*Math.PI/6;
+  camera.getWorldPosition(V2);rig.position.add(V.sub(V2))}
+ if(Math.abs(rx)<.3)step.snapped=0;
+ // sword tip and momentum
+ let tip=null,speed=0,vel=V3.set(0,0,0);const W=S.weapon==='sword'?sword:hammer,L=S.weapon==='sword'?1:.95;
+ if(hands.right&&!S.bow){tip=W.localToWorld(new THREE.Vector3(0,0,-L));
+  if(tipOK&&dt>0){vel=tip.clone().sub(prevTip).divideScalar(dt);speed=vel.length()}prevTip.copy(tip);tipOK=true}else tipOK=false;
+ const pts=tip?[tip,W.localToWorld(new THREE.Vector3(0,0,-L*.65)),W.localToWorld(new THREE.Vector3(0,0,-L*.3))]:[];if(speed>4&&(S.swT=(S.swT||0)-dt)<=0){S.swT=.25;sfx('swish',Math.min(1,speed/8))}
+ // fight
+ if(S.mode==='fight'){
+  S.mana=Math.min(100,S.mana+S.regen*dt);
+  S.shield=Math.max(0,S.shield-dt);shieldM.visible=S.shield>0;S.parryT=Math.max(0,(S.parryT||0)-dt);
+  if(hands.left){hands.left.getWorldPosition(V);const ly=V.y;const lv=(ly-(S.pLY===undefined?ly:S.pLY))/dt;S.pLY=ly;
+   if(S.lDown){S.lT+=dt;if(!S.lDone&&lv<-3&&S.mana>=35)bolt();else if(!S.lDone&&ly>P.y+.1&&S.lT>.5&&S.mana>=40){S.lDone=true;S.mana-=40;S.shield=6;sfx('shield')}}}
+  if(S.toSpawn>0){S.spawnT-=dt;if(S.spawnT<=0){spawn();S.toSpawn--;S.spawnT=1.2}}
+  else if(!enemies.length){S.hp=Math.min(S.maxHp,S.hp+(S.wave%5==0?S.maxHp:15));offerUpgrades()}
+  for(let i=enemies.length-1;i>=0;i--){const e=enemies[i],u=e.userData;
+   if(u.dead){e.scale.multiplyScalar(1-dt*4);e.rotation.x-=dt*3;if(e.scale.x<.1){scene.remove(e);enemies.splice(i,1)}continue}
+   u.hit-=dt;u.cd-=dt;V.set(P.x-e.position.x,0,P.z-e.position.z);const d=V.length();V.normalize();
+   e.lookAt(P.x,0,P.z);
+   const rng=u.type==='archer';if((rng?d>7:d>(u.boss?3:1.1))&&!u.atk)e.position.addScaledVector(V,u.speed*dt);else if(rng&&d<4.5)e.position.addScaledVector(V,-u.speed*dt);
+   if(u.boss&&!u.sum&&u.hp<u.max/2){u.sum=1;spawn('skel');spawn('skel')}
+   if(rng){if(u.cd<=0&&d<11){u.cd=2.5;enemyShot(e,P)}}else swing(e,u,d,dt,pts,speed,P);
+   e.position.addScaledVector(u.kv,dt);u.kv.multiplyScalar(Math.max(0,1-4*dt));
+   if(speed>2&&u.hit<=0)for(const p of pts){V2.set(e.position.x,.9*e.scale.y,e.position.z);
+    if(p.distanceTo(V2)<u.r+.15){const hm=S.weapon==='hammer';const dmg=speed*(hm?6:3)*S.swordMul;hurtEnemy(e,dmg,vel.clone().setY(0).normalize(),Math.min(hm?11:7,speed*(hm?1.5:1)));u.hit=hm?.6:.35;sfx(hm?'thud':'hit',Math.min(1,speed/6));buzz(hands.right,Math.min(1,speed/6),70);break}}}
+  if(S.hp<=0){S.mode='dead';sfx('die');enemies.forEach(e=>scene.remove(e));enemies.length=0;eShots.forEach(s=>scene.remove(s));eShots.length=0;S.shield=0;S.msg='You fell on wave '+S.wave;showCards([{t:'Rise Again',d:'Slash to start a new run'}])}
+ }
+ // cards
+ if((S.mode==='pick'||S.mode==='start'||S.mode==='dead')&&speed>1.2)
+  for(const m of cards){if(pts.some(p=>p.distanceTo(m.position)<.4)){const o=m.userData.o;clearCards();sfx('pick');
+   if(S.mode==='pick'){o.f();startWave()}
+   else{Object.assign(S,{wave:0,hp:100,maxHp:100,mana:100,swordMul:1,spellMul:1,armor:0,regen:8,score:0,shield:0,arrowMul:1,boltMul:1});startWave()}
+   break}}
+ // shots / booms
+ for(let i=shots.length-1;i>=0;i--){const s=shots[i];s.position.addScaledVector(s.userData.v,dt);s.userData.life-=dt;let hit=s.userData.life<=0||s.position.y<0;
+  if(!hit)for(const e of enemies){if(e.userData.dead)continue;V.set(e.position.x,.9,e.position.z);if(V.distanceTo(s.position)<e.userData.r+.2){hit=true;break}}
+  if(hit){boom(s.position);scene.remove(s);shots.splice(i,1)}}
+ for(let i=arrows.length-1;i>=0;i--){const a=arrows[i],u=a.userData;u.v.y-=6*dt;a.position.addScaledVector(u.v,dt);u.life-=dt;a.quaternion.setFromUnitVectors(V.set(0,1,0),V2.copy(u.v).normalize());
+  let hit=u.life<=0||a.position.y<0;
+  if(!hit)for(const e of enemies){const eu=e.userData;if(eu.dead)continue;V.set(e.position.x,.9*e.scale.y,e.position.z);if(V.distanceTo(a.position)<eu.r+.2){hurtEnemy(e,(12+30*u.pw)*S.arrowMul,V2.copy(u.v).setY(0).normalize(),3);hit=true;break}}
+  if(hit){scene.remove(a);arrows.splice(i,1)}}
+ for(let i=eShots.length-1;i>=0;i--){const s=eShots[i],u=s.userData;s.position.addScaledVector(u.v,dt);u.life-=dt;let gone=u.life<=0;
+  if(!gone&&speed>2&&pts.some(p=>p.distanceTo(s.position)<.3))gone=true;
+  else if(!gone&&s.position.distanceTo(P.clone().setY(P.y-.2))<.5){gone=true;hurtPlayer(u.d)}
+  if(gone){scene.remove(s);eShots.splice(i,1)}}
+ for(let i=bolts.length-1;i>=0;i--){const l=bolts[i];l.userData.life-=dt;if(l.userData.life<=0){scene.remove(l);bolts.splice(i,1)}}
+ for(let i=booms.length-1;i>=0;i--){const b=booms[i];b.userData.t+=dt*4;b.scale.setScalar(.3+b.userData.t*1.7);b.material.opacity=.7*(1-b.userData.t);
+  if(b.userData.t>=1){scene.remove(b);booms.splice(i,1)}}
+ S.hudT-=dt;if(S.hudT<=0){drawHud();S.hudT=.15}}
+renderer.setAnimationLoop(()=>{step();renderer.render(scene,camera)});
+
+// Start
+S.msg='Slash the card to begin';showCards([{t:'Ember Trial',d:'Swing fast to hit hard. Slash to begin.'}]);drawHud();
+$('btn').onclick=async()=>{audioInit();
+ if(!navigator.xr){$('msg').textContent='WebXR not available here. Open this page in the Meta Quest Browser.';return}
+ try{const s=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});renderer.xr.setReferenceSpaceType('local-floor');await renderer.xr.setSession(s);$('ui').style.display='none';
+  s.addEventListener('end',()=>{$('ui').style.display=''})}
+ catch(e){$('msg').textContent='Could not start VR. Open this link in the Meta Quest Browser.'}};
+</script></body></html>
